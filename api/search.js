@@ -203,6 +203,58 @@ async function searchUser(query, res) {
 }
 
 async function searchWeb(query, res) {
+    const tavilyKey = process.env.TAVILY_API_KEY;
+
+    if (tavilyKey && tavilyKey.length > 10) {
+        try {
+            const tavilyResp = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + tavilyKey
+                },
+                body: JSON.stringify({
+                    query: query,
+                    search_depth: "basic",
+                    max_results: 8,
+                    include_answer: true
+                })
+            });
+
+            if (tavilyResp.ok) {
+                const tavilyData = await tavilyResp.json();
+                const results = [];
+
+                if (tavilyData.answer) {
+                    results.push({
+                        title: "AI Answer",
+                        snippet: tavilyData.answer,
+                        url: ""
+                    });
+                }
+
+                if (Array.isArray(tavilyData.results)) {
+                    for (let i = 0; i < tavilyData.results.length; i++) {
+                        const r = tavilyData.results[i];
+                        results.push({
+                            title: r.title || "Result",
+                            snippet: r.content || "",
+                            url: r.url || ""
+                        });
+                    }
+                }
+
+                if (results.length > 0) {
+                    return res.status(200).json({
+                        query: query, type: "web", source: "tavily",
+                        count: results.length,
+                        results: results.slice(0, 8)
+                    });
+                }
+            }
+        } catch (e) { /* fall through */ }
+    }
+
     try {
         const wikiTitle = encodeURIComponent(query.replace(/ /g, '_'));
         const wikiUrl = 'https://en.wikipedia.org/api/rest_v1/page/summary/' + wikiTitle;
@@ -230,7 +282,7 @@ async function searchWeb(query, res) {
     try {
         const ddgUrl = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json&no_html=1&skip_disambig=1';
         const ddgResp = await fetch(ddgUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
 
         if (ddgResp.ok) {
