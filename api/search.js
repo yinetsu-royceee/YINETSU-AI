@@ -30,9 +30,6 @@ export default async function handler(req, res) {
     }
 }
 
-// ============================================
-// ROBLOX AUDIO SEARCH
-// ============================================
 async function searchAudio(query, res) {
     try {
         const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
@@ -65,143 +62,127 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — 3-Method Smart (Tavily + Auto-correct + Roblox API)
+// GAME SEARCH — TRULY UNIVERSAL (Tavily + DDG)
+// No hardcoded lists. Auto-discovers from whole web.
 // ============================================
 async function searchGame(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     const allResults = [];
     const seenIds = new Set();
 
-    // STEP 1: Tavily search with roblox.com focus (universal fuzzy)
+    // Helper to extract place IDs from any text
+    function extractPlaceIds(text, sourceUrl, sourceTitle) {
+        if (!text) return;
+        // Match any roblox.com/games/ID pattern
+        const matches = text.match(/roblox\.com\/games\/(\d{6,})/g) || [];
+        for (const m of matches) {
+            const idMatch = m.match(/(\d{6,})/);
+            if (idMatch) {
+                const pid = idMatch[1];
+                if (!seenIds.has(pid)) {
+                    seenIds.add(pid);
+                    let cleanTitle = (sourceTitle || "Roblox Game")
+                        .replace(/\s*[|\-–]\s*(Play on Roblox|Roblox).*$/i, "")
+                        .replace(/^\[.*?\]\s*/, "")
+                        .trim();
+                    if (cleanTitle.length < 3) cleanTitle = "Roblox Game #" + pid.slice(-4);
+                    allResults.push({
+                        id: pid,
+                        placeId: pid,
+                        name: cleanTitle,
+                        creator: "From web",
+                        playing: 0,
+                        url: "https://www.roblox.com/games/" + pid,
+                        snippet: text.slice(0, 120).replace(/\n/g, " ").trim()
+                    });
+                }
+            }
+        }
+    }
+
+    // METHOD 1: Tavily — search roblox.com specifically (highest quality)
     if (tavilyKey && tavilyKey.length > 10) {
         try {
-            const resp = await fetch('https://api.tavily.com/search', {
+            const r1 = await fetch('https://api.tavily.com/search', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + tavilyKey
-                },
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
                 body: JSON.stringify({
-                    query: query + " roblox game",
+                    query: query,
                     search_depth: "advanced",
-                    max_results: 15
+                    max_results: 10,
+                    include_domains: ["roblox.com"]
                 })
             });
-            if (resp.ok) {
-                const data = await resp.json();
-                if (Array.isArray(data.results)) {
-                    for (const r of data.results) {
-                        const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
-                        const matches = combined.match(/roblox\.com\/games\/(\d+)/g) || [];
-                        for (const m of matches) {
-                            const idMatch = m.match(/(\d+)/);
-                            if (idMatch) {
-                                const pid = idMatch[1];
-                                if (!seenIds.has(pid)) {
-                                    seenIds.add(pid);
-                                    let cleanTitle = (r.title || "Roblox Game").replace(/\s*[|\-–]\s*(Play on Roblox|Roblox).*$/i, "").trim();
-                                    if (cleanTitle.length < 3) cleanTitle = r.title || "Roblox Game";
-                                    allResults.push({
-                                        id: pid,
-                                        placeId: pid,
-                                        name: cleanTitle,
-                                        creator: "From web",
-                                        playing: 0,
-                                        url: "https://www.roblox.com/games/" + pid,
-                                        snippet: (r.content || "").slice(0, 120)
-                                    });
-                                }
-                            }
-                        }
+            if (r1.ok) {
+                const d1 = await r1.json();
+                if (Array.isArray(d1.results)) {
+                    for (const r of d1.results) {
+                        extractPlaceIds(
+                            (r.title || "") + " " + (r.content || "") + " " + (r.url || ""),
+                            r.url, r.title
+                        );
                     }
                 }
             }
         } catch (e) { /* continue */ }
     }
 
-    // STEP 2: Roblox legacy API with smart name variations
-    if (allResults.length < 3) {
+    // METHOD 2: Tavily — general web (broader)
+    if (allResults.length < 3 && tavilyKey && tavilyKey.length > 10) {
         try {
-            const variations = [query];
-            const lower = query.toLowerCase().replace(/\s+/g, '');
-            
-            // Known Roblox games (common typos → correct name)
-            const knownGames = {
-                "growagarden": "Grow a Garden",
-                "growgarden": "Grow a Garden",
-                "growa": "Grow a Garden",
-                "bloxfruits": "Blox Fruits",
-                "bloxfruit": "Blox Fruits",
-                "adoptme": "Adopt Me",
-                "stealabrainrot": "Steal a Brainrot",
-                "stealabrain": "Steal a Brainrot",
-                "dresstoimpress": "Dress to Impress",
-                "dressto": "Dress to Impress",
-                "murder": "Murder Mystery 2",
-                "mm2": "Murder Mystery 2",
-                "petssim": "Pet Simulator",
-                "petsim": "Pet Simulator",
-                "towerofhell": "Tower of Hell",
-                "toh": "Tower of Hell",
-                "rainbowfriends": "Rainbow Friends",
-                "brookhaven": "Brookhaven",
-                "jailbreak": "Jailbreak",
-                "arsenal": "Arsenal",
-                "doors": "Doors",
-                "piggy": "Piggy",
-                "evade": "Evade",
-                "combatwarriors": "Combat Warriors",
-                "flee": "Flee the Facility",
-            };
-            
-            if (knownGames[lower]) variations.push(knownGames[lower]);
-            
-            // Auto-split run-together names (bloxfruits → blox fruits)
-            if (!query.includes(' ') && query.length > 5 && query.length < 25) {
-                // Try every 3-8 char split point
-                for (let i = 3; i < query.length - 2; i++) {
-                    variations.push(query.slice(0, i) + ' ' + query.slice(i));
-                    variations.push(query.slice(0, i).toLowerCase() + ' ' + query.slice(i));
+            const r2 = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
+                body: JSON.stringify({
+                    query: '"' + query + '" roblox game',
+                    search_depth: "advanced",
+                    max_results: 15
+                })
+            });
+            if (r2.ok) {
+                const d2 = await r2.json();
+                if (Array.isArray(d2.results)) {
+                    for (const r of d2.results) {
+                        extractPlaceIds(
+                            (r.title || "") + " " + (r.content || "") + " " + (r.url || ""),
+                            r.url, r.title
+                        );
+                    }
                 }
             }
-            
-            // Add lowercase version
-            variations.push(query.toLowerCase());
-            variations.push(query + ' roblox');
-            
-            const tried = new Set();
-            for (const q of variations) {
-                const key = q.toLowerCase().replace(/\s+/g, '');
-                if (tried.has(key)) continue;
-                tried.add(key);
-                
-                const legacyUrl = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(q) + '&model.maxRows=20';
-                try {
-                    const legacyResp = await fetch(legacyUrl, {
-                        headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-                    });
-                    if (legacyResp.ok) {
-                        const legacyData = await legacyResp.json();
-                        if (Array.isArray(legacyData.games)) {
-                            for (const g of legacyData.games) {
-                                if (g.placeId && !seenIds.has(String(g.placeId))) {
-                                    seenIds.add(String(g.placeId));
-                                    allResults.push({
-                                        id: String(g.universeId || g.placeId),
-                                        placeId: g.placeId,
-                                        name: g.name || "Untitled",
-                                        creator: g.creatorName || "Unknown",
-                                        playing: g.playerCount || 0,
-                                        url: "https://www.roblox.com/games/" + g.placeId
-                                    });
-                                }
-                            }
-                        }
+        } catch (e) { /* continue */ }
+    }
+
+    // METHOD 3: DuckDuckGo HTML — independent index (backup)
+    if (allResults.length < 3) {
+        try {
+            const ddgUrl = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query + ' roblox game site:roblox.com');
+            const ddgResp = await fetch(ddgUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+                }
+            });
+            if (ddgResp.ok) {
+                const html = await ddgResp.text();
+                // Extract place IDs from HTML
+                const idMatches = html.match(/roblox\.com\/games\/(\d{6,})/g) || [];
+                const uniqueIds = [...new Set(idMatches.map(m => m.match(/(\d{6,})/)[1]))];
+                for (const pid of uniqueIds.slice(0, 10)) {
+                    if (!seenIds.has(pid)) {
+                        seenIds.add(pid);
+                        allResults.push({
+                            id: pid,
+                            placeId: pid,
+                            name: "Roblox Game #" + pid.slice(-6),
+                            creator: "From web",
+                            playing: 0,
+                            url: "https://www.roblox.com/games/" + pid,
+                            snippet: ""
+                        });
                     }
-                } catch (e) { /* continue */ }
-                if (allResults.length >= 8) break;
+                }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) { /* continue */ }
     }
 
     return res.status(200).json({
@@ -242,7 +223,7 @@ async function searchUser(query, res) {
 }
 
 // ============================================
-// SCRIPT SEARCH — Tavily + Fetch + Extract
+// SCRIPT SEARCH
 // ============================================
 async function searchScript(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
@@ -363,9 +344,6 @@ function analyzeScriptSafety(code) {
     return { level, score, flags };
 }
 
-// ============================================
-// WEB SEARCH — Tavily → Wikipedia → Fallback
-// ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey && tavilyKey.length > 10) {
