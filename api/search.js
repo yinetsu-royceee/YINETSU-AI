@@ -2,8 +2,11 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Content-Type', 'application/json');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
 
     const query = req.query.q || req.query.query || "";
     const type = (req.query.type || "web").toLowerCase();
@@ -17,69 +20,147 @@ export default async function handler(req, res) {
     }
 
     try {
-        if (type === "audio" || type === "music") return await searchRobloxAudio(query, res);
-        if (type === "game") return await searchRobloxGame(query, res);
-        if (type === "user") return await searchRobloxUser(query, res);
+        if (type === "audio" || type === "music") {
+            return await searchAudio(query, res);
+        }
+        if (type === "game") {
+            return await searchGame(query, res);
+        }
+        if (type === "user") {
+            return await searchUser(query, res);
+        }
         return await searchWeb(query, res);
     } catch (err) {
-        return res.status(500).json({ error: err.message, query, type, results: [] });
+        return res.status(200).json({
+            query: query,
+            type: type,
+            count: 0,
+            results: [],
+            error: String(err && err.message ? err.message : err)
+        });
     }
 }
 
-async function searchRobloxAudio(query, res) {
+// ============================================
+// ROBLOX AUDIO SEARCH
+// ============================================
+async function searchAudio(query, res) {
     try {
-        const url = `https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=${encodeURIComponent(query)}&Limit=30&SortType=Relevance`;
+        const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
         const response = await fetch(url, {
-            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+            headers: {
+                'User-Agent': 'Roblox/WinInet',
+                'Accept': 'application/json'
+            }
         });
-        if (!response.ok) return res.status(200).json({ query, type: "audio", count: 0, results: [], note: `API ${response.status}` });
+
+        if (!response.ok) {
+            return res.status(200).json({
+                query: query,
+                type: "audio",
+                count: 0,
+                results: [],
+                note: "Roblox returned " + response.status
+            });
+        }
+
         const data = await response.json();
         const results = [];
+
         if (Array.isArray(data.data)) {
-            for (const item of data.data) {
-                if (item.id) results.push({
-                    id: String(item.id),
-                    name: item.name || "Untitled",
-                    creator: item.creatorName || "Unknown",
-                    duration: item.duration || 0,
-                    url: `https://www.roblox.com/library/${item.id}`
+            for (let i = 0; i < data.data.length; i++) {
+                const item = data.data[i];
+                if (item && item.id) {
+                    results.push({
+                        id: String(item.id),
+                        name: item.name || "Untitled",
+                        creator: item.creatorName || "Unknown",
+                        duration: item.duration || 0,
+                        url: "https://www.roblox.com/library/" + item.id
+                    });
+                }
+            }
+        }
+
+        return res.status(200).json({
+            query: query,
+            type: "audio",
+            count: results.length,
+            results: results.slice(0, 12)
+        });
+    } catch (err) {
+        return res.status(200).json({
+            query: query,
+            type: "audio",
+            count: 0,
+            results: [],
+            error: String(err && err.message ? err.message : err)
+        });
+    }
+}
+
+// ============================================
+// ROBLOX GAME SEARCH
+// ============================================
+async function searchGame(query, res) {
+    try {
+        const url = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Roblox/WinInet',
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            return res.status(200).json({
+                query: query,
+                type: "game",
+                count: 0,
+                results: [],
+                note: "Roblox returned " + response.status
+            });
+        }
+
+        const data = await response.json();
+        const results = [];
+
+        if (Array.isArray(data.games)) {
+            for (let i = 0; i < data.games.length; i++) {
+                const g = data.games[i];
+                results.push({
+                    id: String(g.universeId || g.placeId || ""),
+                    name: g.name || "Untitled",
+                    creator: g.creatorName || "Unknown",
+                    playing: g.playerCount || 0,
+                    url: g.placeId ? "https://www.roblox.com/games/" + g.placeId : ""
                 });
             }
         }
-        return res.status(200).json({ query, type: "audio", count: results.length, results: results.slice(0, 12) });
-    } catch (err) {
-        return res.status(200).json({ query, type: "audio", count: 0, results: [], error: err.message });
-    }
-}
 
-async function searchRobloxGame(query, res) {
-    try {
-        const url = `https://games.roblox.com/v1/games/list?model.keyword=${encodeURIComponent(query)}&model.maxRows=20`;
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+        return res.status(200).json({
+            query: query,
+            type: "game",
+            count: results.length,
+            results: results.slice(0, 10)
         });
-        if (!response.ok) return res.status(200).json({ query, type: "game", count: 0, results: [], note: `API ${response.status}` });
-        const data = await response.json();
-        const results = [];
-        if (Array.isArray(data.games)) {
-            for (const g of data.games) results.push({
-                id: String(g.universeId || g.placeId || ""),
-                name: g.name || "Untitled",
-                creator: g.creatorName || "Unknown",
-                playing: g.playerCount || 0,
-                url: g.placeId ? `https://www.roblox.com/games/${g.placeId}` : ""
-            });
-        }
-        return res.status(200).json({ query, type: "game", count: results.length, results: results.slice(0, 10) });
     } catch (err) {
-        return res.status(200).json({ query, type: "game", count: 0, results: [], error: err.message });
+        return res.status(200).json({
+            query: query,
+            type: "game",
+            count: 0,
+            results: [],
+            error: String(err && err.message ? err.message : err)
+        });
     }
 }
 
-async function searchRobloxUser(query, res) {
+// ============================================
+// ROBLOX USER SEARCH (with 2 fallbacks)
+// ============================================
+async function searchUser(query, res) {
     try {
-        // ✅ NEW: use v2 API with proper params
-        const url = `https://users.roblox.com/v1/users/search?keyword=${encodeURIComponent(query)}&limit=10`;
+        const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
         const response = await fetch(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -87,76 +168,123 @@ async function searchRobloxUser(query, res) {
             }
         });
 
-        if (!response.ok) {
-            // Fallback: try users.roblox.com v1 (older format)
-            const fallbackUrl = `https://users.roblox.com/v1/usernames/users`;
-            const fbResp = await fetch(fallbackUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0'
-                },
-                body: JSON.stringify({ usernames: [query], excludeBannedUsers: true })
-            });
-            if (fbResp.ok) {
-                const fbData = await fbResp.json();
-                const results = [];
-                if (Array.isArray(fbData.data)) {
-                    for (const u of fbData.data) results.push({
+        if (response.ok) {
+            const data = await response.json();
+            const results = [];
+            if (Array.isArray(data.data)) {
+                for (let i = 0; i < data.data.length; i++) {
+                    const u = data.data[i];
+                    results.push({
                         id: String(u.id),
                         name: u.name || "Unknown",
                         displayName: u.displayName || u.name,
-                        url: `https://www.roblox.com/users/${u.id}/profile`
+                        url: "https://www.roblox.com/users/" + u.id + "/profile"
                     });
                 }
-                return res.status(200).json({ query, type: "user", count: results.length, results });
             }
-            return res.status(200).json({ query, type: "user", count: 0, results: [], note: `API ${response.status}` });
+            if (results.length > 0) {
+                return res.status(200).json({
+                    query: query,
+                    type: "user",
+                    count: results.length,
+                    results: results.slice(0, 10)
+                });
+            }
         }
 
-        const data = await response.json();
-        const results = [];
-        if (Array.isArray(data.data)) {
-            for (const u of data.data) results.push({
-                id: String(u.id),
-                name: u.name || "Unknown",
-                displayName: u.displayName || u.name,
-                url: `https://www.roblox.com/users/${u.id}/profile`
+        // Fallback: exact username lookup
+        const fbUrl = 'https://users.roblox.com/v1/usernames/users';
+        const fbResp = await fetch(fbUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0'
+            },
+            body: JSON.stringify({
+                usernames: [query],
+                excludeBannedUsers: true
+            })
+        });
+
+        if (fbResp.ok) {
+            const fbData = await fbResp.json();
+            const results = [];
+            if (Array.isArray(fbData.data)) {
+                for (let i = 0; i < fbData.data.length; i++) {
+                    const u = fbData.data[i];
+                    results.push({
+                        id: String(u.id),
+                        name: u.name || "Unknown",
+                        displayName: u.displayName || u.name,
+                        url: "https://www.roblox.com/users/" + u.id + "/profile"
+                    });
+                }
+            }
+            return res.status(200).json({
+                query: query,
+                type: "user",
+                count: results.length,
+                results: results
             });
         }
-        return res.status(200).json({ query, type: "user", count: results.length, results: results.slice(0, 10) });
+
+        return res.status(200).json({
+            query: query,
+            type: "user",
+            count: 0,
+            results: [],
+            note: "Roblox user API unavailable"
+        });
     } catch (err) {
-        return res.status(200).json({ query, type: "user", count: 0, results: [], error: err.message });
+        return res.status(200).json({
+            query: query,
+            type: "user",
+            count: 0,
+            results: [],
+            error: String(err && err.message ? err.message : err)
+        });
     }
 }
 
+// ============================================
+// WEB SEARCH (Wikipedia primary, DDG fallback, link final)
+// ============================================
 async function searchWeb(query, res) {
-    // ✅ NEW: Use Wikipedia API as primary (no bot blocking)
+    // Try Wikipedia first
     try {
-        const wikiUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query.replace(/ /g, '_'))}`;
+        const wikiTitle = encodeURIComponent(query.replace(/ /g, '_'));
+        const wikiUrl = 'https://en.wikipedia.org/api/rest_v1/page/summary/' + wikiTitle;
         const wikiResp = await fetch(wikiUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0' }
         });
 
         if (wikiResp.ok) {
             const wikiData = await wikiResp.json();
-            if (wikiData.extract) {
+            if (wikiData && wikiData.extract) {
+                let pageUrl = "https://en.wikipedia.org/wiki/" + wikiTitle;
+                if (wikiData.content_urls && wikiData.content_urls.desktop && wikiData.content_urls.desktop.page) {
+                    pageUrl = wikiData.content_urls.desktop.page;
+                }
                 return res.status(200).json({
-                    query, type: "web", source: "wikipedia",
+                    query: query,
+                    type: "web",
+                    source: "wikipedia",
                     count: 1,
                     results: [{
                         title: wikiData.title || query,
                         snippet: wikiData.extract,
-                        url: wikiData.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(query)}`
+                        url: pageUrl
                     }]
                 });
             }
         }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+        // continue to fallback
+    }
 
-    // Fallback: DuckDuckGo
+    // Fallback: DuckDuckGo instant answer
     try {
-        const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const ddgUrl = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json&no_html=1&skip_disambig=1';
         const ddgResp = await fetch(ddgUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
@@ -164,43 +292,58 @@ async function searchWeb(query, res) {
         if (ddgResp.ok) {
             const data = await ddgResp.json();
             const results = [];
-            if (data.AbstractText) results.push({
-                title: data.Heading || "Answer",
-                snippet: data.AbstractText,
-                url: data.AbstractURL || ""
-            });
-            if (data.Definition) results.push({
-                title: "Definition",
-                snippet: data.Definition,
-                url: data.DefinitionURL || ""
-            });
+
+            if (data.AbstractText) {
+                results.push({
+                    title: data.Heading || "Answer",
+                    snippet: data.AbstractText,
+                    url: data.AbstractURL || ""
+                });
+            }
+            if (data.Definition) {
+                results.push({
+                    title: "Definition",
+                    snippet: data.Definition,
+                    url: data.DefinitionURL || ""
+                });
+            }
             if (Array.isArray(data.RelatedTopics)) {
-                for (const t of data.RelatedTopics.slice(0, 6)) {
-                    if (t.Text && t.FirstURL) results.push({
-                        title: t.Text.split(" - ")[0] || "Result",
-                        snippet: t.Text,
-                        url: t.FirstURL
-                    });
+                for (let i = 0; i < data.RelatedTopics.length && results.length < 8; i++) {
+                    const t = data.RelatedTopics[i];
+                    if (t && t.Text && t.FirstURL) {
+                        results.push({
+                            title: t.Text.split(" - ")[0] || "Result",
+                            snippet: t.Text,
+                            url: t.FirstURL
+                        });
+                    }
                 }
             }
+
             if (results.length > 0) {
                 return res.status(200).json({
-                    query, type: "web", source: "duckduckgo",
+                    query: query,
+                    type: "web",
+                    source: "duckduckgo",
                     count: results.length,
                     results: results.slice(0, 8)
                 });
             }
         }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+        // continue to final fallback
+    }
 
-    // Final fallback: search link
+    // Final fallback
     return res.status(200).json({
-        query, type: "web", source: "fallback",
+        query: query,
+        type: "web",
+        source: "fallback",
         count: 1,
         results: [{
-            title: `Search "${query}" on the web`,
+            title: 'Search "' + query + '" on the web',
             snippet: "Click to search online.",
-            url: `https://www.google.com/search?q=${encodeURIComponent(query)}`
+            url: "https://www.google.com/search?q=" + encodeURIComponent(query)
         }]
     });
 }
