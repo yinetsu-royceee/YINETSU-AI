@@ -31,29 +31,17 @@ export default async function handler(req, res) {
     }
 }
 
-// ============================================
-// ROBLOX AUDIO SEARCH
-// ============================================
 async function searchAudio(query, res) {
     try {
         const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
         const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Roblox/WinInet',
-                'Accept': 'application/json'
-            }
+            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
         });
-
         if (!response.ok) {
-            return res.status(200).json({
-                query: query, type: "audio", count: 0, results: [],
-                note: "Roblox returned " + response.status
-            });
+            return res.status(200).json({ query: query, type: "audio", count: 0, results: [], note: "Roblox " + response.status });
         }
-
         const data = await response.json();
         const results = [];
-
         if (Array.isArray(data.data)) {
             for (let i = 0; i < data.data.length; i++) {
                 const item = data.data[i];
@@ -68,43 +56,23 @@ async function searchAudio(query, res) {
                 }
             }
         }
-
-        return res.status(200).json({
-            query: query, type: "audio",
-            count: results.length,
-            results: results.slice(0, 12)
-        });
+        return res.status(200).json({ query: query, type: "audio", count: results.length, results: results.slice(0, 12) });
     } catch (err) {
-        return res.status(200).json({
-            query: query, type: "audio", count: 0, results: [],
-            error: String(err && err.message ? err.message : err)
-        });
+        return res.status(200).json({ query: query, type: "audio", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
-// ============================================
-// ROBLOX GAME SEARCH
-// ============================================
 async function searchGame(query, res) {
     try {
         const url = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
         const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Roblox/WinInet',
-                'Accept': 'application/json'
-            }
+            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
         });
-
         if (!response.ok) {
-            return res.status(200).json({
-                query: query, type: "game", count: 0, results: [],
-                note: "Roblox returned " + response.status
-            });
+            return res.status(200).json({ query: query, type: "game", count: 0, results: [], note: "Roblox " + response.status });
         }
-
         const data = await response.json();
         const results = [];
-
         if (Array.isArray(data.games)) {
             for (let i = 0; i < data.games.length; i++) {
                 const g = data.games[i];
@@ -117,33 +85,18 @@ async function searchGame(query, res) {
                 });
             }
         }
-
-        return res.status(200).json({
-            query: query, type: "game",
-            count: results.length,
-            results: results.slice(0, 10)
-        });
+        return res.status(200).json({ query: query, type: "game", count: results.length, results: results.slice(0, 10) });
     } catch (err) {
-        return res.status(200).json({
-            query: query, type: "game", count: 0, results: [],
-            error: String(err && err.message ? err.message : err)
-        });
+        return res.status(200).json({ query: query, type: "game", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
-// ============================================
-// ROBLOX USER SEARCH
-// ============================================
 async function searchUser(query, res) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
         const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            }
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
-
         if (response.ok) {
             const data = await response.json();
             const results = [];
@@ -159,27 +112,15 @@ async function searchUser(query, res) {
                 }
             }
             if (results.length > 0) {
-                return res.status(200).json({
-                    query: query, type: "user",
-                    count: results.length,
-                    results: results.slice(0, 10)
-                });
+                return res.status(200).json({ query: query, type: "user", count: results.length, results: results.slice(0, 10) });
             }
         }
-
         const fbUrl = 'https://users.roblox.com/v1/usernames/users';
         const fbResp = await fetch(fbUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0'
-            },
-            body: JSON.stringify({
-                usernames: [query],
-                excludeBannedUsers: true
-            })
+            headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+            body: JSON.stringify({ usernames: [query], excludeBannedUsers: true })
         });
-
         if (fbResp.ok) {
             const fbData = await fbResp.json();
             const results = [];
@@ -194,32 +135,22 @@ async function searchUser(query, res) {
                     });
                 }
             }
-            return res.status(200).json({
-                query: query, type: "user",
-                count: results.length, results: results
-            });
+            return res.status(200).json({ query: query, type: "user", count: results.length, results: results });
         }
-
-        return res.status(200).json({
-            query: query, type: "user", count: 0, results: [],
-            note: "Roblox user API unavailable"
-        });
+        return res.status(200).json({ query: query, type: "user", count: 0, results: [], note: "User API unavailable" });
     } catch (err) {
-        return res.status(200).json({
-            query: query, type: "user", count: 0, results: [],
-            error: String(err && err.message ? err.message : err)
-        });
+        return res.status(200).json({ query: query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
 // ============================================
-// SCRIPT SEARCH (Tavily + Auto-Fetch + Safety)
+// SCRIPT SEARCH — Extract loadstring from snippets
 // ============================================
 async function searchScript(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     let searchResults = [];
 
-    // Step 1: Search via Tavily
+    // Search via Tavily
     if (tavilyKey && tavilyKey.length > 10) {
         try {
             const tavilyResp = await fetch('https://api.tavily.com/search', {
@@ -230,8 +161,9 @@ async function searchScript(query, res) {
                 },
                 body: JSON.stringify({
                     query: query + " roblox script loadstring",
-                    search_depth: "basic",
-                    max_results: 5
+                    search_depth: "advanced",
+                    max_results: 10,
+                    include_answer: false
                 })
             });
             if (tavilyResp.ok) {
@@ -249,62 +181,63 @@ async function searchScript(query, res) {
         } catch (e) { /* ignore */ }
     }
 
-    // Step 2: Try to auto-fetch top result from allowed host
-    let fetchedCode = null;
-    let safety = { level: "UNKNOWN", flags: [] };
-    let loadedFrom = null;
-
-    const allowedHosts = [
-        'pastebin.com',
-        'raw.githubusercontent.com',
-        'githubusercontent.com',
-        'gist.githubusercontent.com',
-        'rentry.co',
-        'hastebin.com',
-        'pastes.io'
-    ];
+    // Extract loadstring patterns from all snippets
+    const extractedScripts = [];
+    const seenUrls = new Set();
 
     for (const result of searchResults) {
-        if (!result.url) continue;
-        try {
-            const parsed = new URL(result.url);
-            const host = parsed.hostname.replace('www.', '');
-            const isAllowed = allowedHosts.some(h => host === h || host.endsWith('.' + h));
-            if (!isAllowed) continue;
-
-            let fetchUrl = result.url;
-            if (host === 'pastebin.com' && !fetchUrl.includes('/raw/')) {
-                const match = fetchUrl.match(/pastebin\.com\/([A-Za-z0-9]+)/);
-                if (match) fetchUrl = 'https://pastebin.com/raw/' + match[1];
+        const snippet = result.snippet || "";
+        const patterns = extractLoadstrings(snippet);
+        for (const code of patterns) {
+            const hash = code.slice(0, 100);
+            if (!seenUrls.has(hash)) {
+                seenUrls.add(hash);
+                extractedScripts.push({
+                    code: code,
+                    source: result.url,
+                    sourceTitle: result.title,
+                    safety: analyzeScriptSafety(code, "snippet")
+                });
             }
-
-            const codeResp = await fetch(fetchUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                redirect: 'follow'
-            });
-
-            if (codeResp.ok) {
-                const code = await codeResp.text();
-                if (code && code.length > 10 && code.length < 100000) {
-                    fetchedCode = code.slice(0, 5000);
-                    loadedFrom = fetchUrl;
-                    safety = analyzeScriptSafety(code, host);
-                    break;
-                }
-            }
-        } catch (e) { /* continue */ }
+        }
     }
 
     return res.status(200).json({
         query: query,
         type: "script",
         searchResults: searchResults.slice(0, 5),
-        fetched: fetchedCode ? {
-            from: loadedFrom,
-            code: fetchedCode,
-            safety: safety
-        } : null
+        extractedCount: extractedScripts.length,
+        scripts: extractedScripts.slice(0, 8)
     });
+}
+
+function extractLoadstrings(text) {
+    const scripts = [];
+    
+    // Pattern 1: loadstring(game:HttpGet("URL"))
+    // Pattern 2: loadstring(game:HttpGet('URL'))
+    // Pattern 3: loadstring(game:HttpGetAsync("URL"))
+    const patterns = [
+        /loadstring\s*\(\s*game\s*:\s*HttpGet\s*\(\s*["']([^"']+)["']\s*\)\s*\)/g,
+        /loadstring\s*\(\s*game\s*:\s*HttpGetAsync\s*\(\s*["']([^"']+)["']\s*\)\s*\)/g,
+        /game\s*:\s*HttpGet\s*\(\s*["'](https?:\/\/[^"']+)["']\s*\)/g
+    ];
+
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const url = match[1];
+            if (url && url.startsWith('http')) {
+                // Rebuild the loadstring line
+                const fullCode = 'loadstring(game:HttpGet("' + url + '"))()';
+                if (!scripts.includes(fullCode)) {
+                    scripts.push(fullCode);
+                }
+            }
+        }
+    }
+
+    return scripts;
 }
 
 function analyzeScriptSafety(code, host) {
@@ -313,20 +246,13 @@ function analyzeScriptSafety(code, host) {
     let score = 0;
 
     if (lower.includes('roblosecurity')) { flags.push("🚨 Cookie stealer detected"); score -= 5; }
-    if (lower.includes('getuseridfromcookie')) { flags.push("🚨 Cookie grabber"); score -= 5; }
-    if (lower.includes('discord.com/api/webhooks') || lower.includes('discordapp.com/api/webhooks')) {
-        flags.push("🚨 Discord webhook (token logger pattern)"); score -= 4;
-    }
-    if (lower.includes('syn.request') || lower.includes('http_request')) {
-        flags.push("⚠️ Makes external HTTP requests"); score -= 1;
-    }
+    if (lower.includes('discord.com/api/webhooks')) { flags.push("🚨 Discord webhook pattern"); score -= 4; }
+    if (lower.includes('syn.request') || lower.includes('http_request')) { flags.push("⚠️ HTTP requests"); score -= 1; }
     if (/[a-z0-9]{100,}/.test(code)) { flags.push("⚠️ Possible obfuscation"); score -= 1; }
-    if (code.length > 50000) { flags.push("⚠️ Very large script (50k+ chars)"); score -= 1; }
-    if (host === 'raw.githubusercontent.com' || host === 'githubusercontent.com' || host === 'gist.githubusercontent.com') {
-        flags.push("✅ GitHub source (transparent)"); score += 3;
+    if (code.includes('loadstring')) { flags.push("ℹ️ Standard loadstring pattern"); }
+    if (lower.includes('roblox.com') || lower.includes('pastebin') || lower.includes('githubusercontent')) {
+        flags.push("✅ Uses known script host"); score += 2;
     }
-    if (code.includes('loadstring')) { flags.push("ℹ️ Uses loadstring (common pattern)"); }
-    if (lower.includes('made by') || lower.includes('-- [')) { flags.push("✅ Has author signature"); score += 2; }
 
     let level = "CAUTION";
     if (score >= 3) level = "SAFE";
@@ -338,7 +264,7 @@ function analyzeScriptSafety(code, host) {
 }
 
 // ============================================
-// WEB SEARCH (Tavily → Wikipedia → DDG fallback)
+// WEB SEARCH
 // ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
@@ -358,19 +284,12 @@ async function searchWeb(query, res) {
                     include_answer: true
                 })
             });
-
             if (tavilyResp.ok) {
                 const tavilyData = await tavilyResp.json();
                 const results = [];
-
                 if (tavilyData.answer) {
-                    results.push({
-                        title: "AI Answer",
-                        snippet: tavilyData.answer,
-                        url: ""
-                    });
+                    results.push({ title: "AI Answer", snippet: tavilyData.answer, url: "" });
                 }
-
                 if (Array.isArray(tavilyData.results)) {
                     for (let i = 0; i < tavilyData.results.length; i++) {
                         const r = tavilyData.results[i];
@@ -381,12 +300,10 @@ async function searchWeb(query, res) {
                         });
                     }
                 }
-
                 if (results.length > 0) {
                     return res.status(200).json({
                         query: query, type: "web", source: "tavily",
-                        count: results.length,
-                        results: results.slice(0, 8)
+                        count: results.length, results: results.slice(0, 8)
                     });
                 }
             }
@@ -397,7 +314,6 @@ async function searchWeb(query, res) {
         const wikiTitle = encodeURIComponent(query.replace(/ /g, '_'));
         const wikiUrl = 'https://en.wikipedia.org/api/rest_v1/page/summary/' + wikiTitle;
         const wikiResp = await fetch(wikiUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-
         if (wikiResp.ok) {
             const wikiData = await wikiResp.json();
             if (wikiData && wikiData.extract) {
@@ -407,11 +323,7 @@ async function searchWeb(query, res) {
                 }
                 return res.status(200).json({
                     query: query, type: "web", source: "wikipedia", count: 1,
-                    results: [{
-                        title: wikiData.title || query,
-                        snippet: wikiData.extract,
-                        url: pageUrl
-                    }]
+                    results: [{ title: wikiData.title || query, snippet: wikiData.extract, url: pageUrl }]
                 });
             }
         }
@@ -419,10 +331,7 @@ async function searchWeb(query, res) {
 
     try {
         const ddgUrl = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) + '&format=json&no_html=1&skip_disambig=1';
-        const ddgResp = await fetch(ddgUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
-
+        const ddgResp = await fetch(ddgUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (ddgResp.ok) {
             const data = await ddgResp.json();
             const results = [];
