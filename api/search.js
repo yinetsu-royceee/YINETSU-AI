@@ -13,7 +13,7 @@ export default async function handler(req, res) {
         return res.status(200).json({
             status: "alive",
             message: "search.js working",
-            usage: "?q=your_query&type=web|audio|game|user"
+            usage: "?q=your_query&type=web|audio|game|user|script"
         });
     }
 
@@ -21,6 +21,7 @@ export default async function handler(req, res) {
         if (type === "audio" || type === "music") return await searchAudio(query, res);
         if (type === "game") return await searchGame(query, res);
         if (type === "user") return await searchUser(query, res);
+        if (type === "script") return await searchScript(query, res);
         return await searchWeb(query, res);
     } catch (err) {
         return res.status(200).json({
@@ -30,6 +31,9 @@ export default async function handler(req, res) {
     }
 }
 
+// ============================================
+// ROBLOX AUDIO SEARCH
+// ============================================
 async function searchAudio(query, res) {
     try {
         const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
@@ -78,6 +82,9 @@ async function searchAudio(query, res) {
     }
 }
 
+// ============================================
+// ROBLOX GAME SEARCH
+// ============================================
 async function searchGame(query, res) {
     try {
         const url = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
@@ -124,6 +131,9 @@ async function searchGame(query, res) {
     }
 }
 
+// ============================================
+// ROBLOX USER SEARCH
+// ============================================
 async function searchUser(query, res) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
@@ -202,6 +212,134 @@ async function searchUser(query, res) {
     }
 }
 
+// ============================================
+// SCRIPT SEARCH (Tavily + Auto-Fetch + Safety)
+// ============================================
+async function searchScript(query, res) {
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    let searchResults = [];
+
+    // Step 1: Search via Tavily
+    if (tavilyKey && tavilyKey.length > 10) {
+        try {
+            const tavilyResp = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + tavilyKey
+                },
+                body: JSON.stringify({
+                    query: query + " roblox script loadstring",
+                    search_depth: "basic",
+                    max_results: 5
+                })
+            });
+            if (tavilyResp.ok) {
+                const tavilyData = await tavilyResp.json();
+                if (Array.isArray(tavilyData.results)) {
+                    for (const r of tavilyData.results) {
+                        searchResults.push({
+                            title: r.title || "Result",
+                            url: r.url || "",
+                            snippet: r.content || ""
+                        });
+                    }
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    // Step 2: Try to auto-fetch top result from allowed host
+    let fetchedCode = null;
+    let safety = { level: "UNKNOWN", flags: [] };
+    let loadedFrom = null;
+
+    const allowedHosts = [
+        'pastebin.com',
+        'raw.githubusercontent.com',
+        'githubusercontent.com',
+        'gist.githubusercontent.com',
+        'rentry.co',
+        'hastebin.com',
+        'pastes.io'
+    ];
+
+    for (const result of searchResults) {
+        if (!result.url) continue;
+        try {
+            const parsed = new URL(result.url);
+            const host = parsed.hostname.replace('www.', '');
+            const isAllowed = allowedHosts.some(h => host === h || host.endsWith('.' + h));
+            if (!isAllowed) continue;
+
+            let fetchUrl = result.url;
+            if (host === 'pastebin.com' && !fetchUrl.includes('/raw/')) {
+                const match = fetchUrl.match(/pastebin\.com\/([A-Za-z0-9]+)/);
+                if (match) fetchUrl = 'https://pastebin.com/raw/' + match[1];
+            }
+
+            const codeResp = await fetch(fetchUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                redirect: 'follow'
+            });
+
+            if (codeResp.ok) {
+                const code = await codeResp.text();
+                if (code && code.length > 10 && code.length < 100000) {
+                    fetchedCode = code.slice(0, 5000);
+                    loadedFrom = fetchUrl;
+                    safety = analyzeScriptSafety(code, host);
+                    break;
+                }
+            }
+        } catch (e) { /* continue */ }
+    }
+
+    return res.status(200).json({
+        query: query,
+        type: "script",
+        searchResults: searchResults.slice(0, 5),
+        fetched: fetchedCode ? {
+            from: loadedFrom,
+            code: fetchedCode,
+            safety: safety
+        } : null
+    });
+}
+
+function analyzeScriptSafety(code, host) {
+    const lower = code.toLowerCase();
+    const flags = [];
+    let score = 0;
+
+    if (lower.includes('roblosecurity')) { flags.push("🚨 Cookie stealer detected"); score -= 5; }
+    if (lower.includes('getuseridfromcookie')) { flags.push("🚨 Cookie grabber"); score -= 5; }
+    if (lower.includes('discord.com/api/webhooks') || lower.includes('discordapp.com/api/webhooks')) {
+        flags.push("🚨 Discord webhook (token logger pattern)"); score -= 4;
+    }
+    if (lower.includes('syn.request') || lower.includes('http_request')) {
+        flags.push("⚠️ Makes external HTTP requests"); score -= 1;
+    }
+    if (/[a-z0-9]{100,}/.test(code)) { flags.push("⚠️ Possible obfuscation"); score -= 1; }
+    if (code.length > 50000) { flags.push("⚠️ Very large script (50k+ chars)"); score -= 1; }
+    if (host === 'raw.githubusercontent.com' || host === 'githubusercontent.com' || host === 'gist.githubusercontent.com') {
+        flags.push("✅ GitHub source (transparent)"); score += 3;
+    }
+    if (code.includes('loadstring')) { flags.push("ℹ️ Uses loadstring (common pattern)"); }
+    if (lower.includes('made by') || lower.includes('-- [')) { flags.push("✅ Has author signature"); score += 2; }
+
+    let level = "CAUTION";
+    if (score >= 3) level = "SAFE";
+    else if (score >= 1) level = "LIKELY_SAFE";
+    else if (score <= -4) level = "DANGER";
+    else if (score <= -1) level = "SUSPICIOUS";
+
+    return { level: level, score: score, flags: flags };
+}
+
+// ============================================
+// WEB SEARCH (Tavily → Wikipedia → DDG fallback)
+// ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
 
