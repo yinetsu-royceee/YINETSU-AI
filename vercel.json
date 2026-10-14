@@ -10,7 +10,7 @@
       "use": "@vercel/node"
     },
     {
-      "src": "api/search/index.js",
+      "src": "api/tavily-test.js",
       "use": "@vercel/node"
     }
   ],
@@ -24,8 +24,8 @@
       "dest": "api/search.js"
     },
     {
-      "src": "/api/search",
-      "dest": "api/search/index.js"
+      "src": "/api/tavily-test",
+      "dest": "api/tavily-test.js"
     }
   ]
 }
