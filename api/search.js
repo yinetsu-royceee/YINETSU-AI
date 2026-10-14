@@ -65,17 +65,17 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — Smart: Tavily primary, Roblox fallback
+// GAME SEARCH — 3-Method Smart (Tavily + Auto-correct + Roblox API)
 // ============================================
 async function searchGame(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     const allResults = [];
     const seenIds = new Set();
 
-    // METHOD 1: Tavily (universal, fuzzy matching)
+    // STEP 1: Tavily search with roblox.com focus (universal fuzzy)
     if (tavilyKey && tavilyKey.length > 10) {
         try {
-            const tavilyResp = await fetch('https://api.tavily.com/search', {
+            const resp = await fetch('https://api.tavily.com/search', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -84,60 +84,122 @@ async function searchGame(query, res) {
                 body: JSON.stringify({
                     query: query + " roblox game",
                     search_depth: "advanced",
-                    max_results: 10
+                    max_results: 15
                 })
             });
-            if (tavilyResp.ok) {
-                const tavilyData = await tavilyResp.json();
-                if (Array.isArray(tavilyData.results)) {
-                    for (const r of tavilyData.results) {
-                        const url = r.url || "";
-                        const placeMatch = url.match(/roblox\.com\/games\/(\d+)/);
-                        if (placeMatch) {
-                            const placeId = placeMatch[1];
-                            if (!seenIds.has(placeId)) {
-                                seenIds.add(placeId);
-                                allResults.push({
-                                    id: placeId,
-                                    placeId: placeId,
-                                    name: r.title || "Roblox Game",
-                                    creator: "From web",
-                                    playing: 0,
-                                    url: "https://www.roblox.com/games/" + placeId,
-                                    snippet: (r.content || "").slice(0, 120)
-                                });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (Array.isArray(data.results)) {
+                    for (const r of data.results) {
+                        const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
+                        const matches = combined.match(/roblox\.com\/games\/(\d+)/g) || [];
+                        for (const m of matches) {
+                            const idMatch = m.match(/(\d+)/);
+                            if (idMatch) {
+                                const pid = idMatch[1];
+                                if (!seenIds.has(pid)) {
+                                    seenIds.add(pid);
+                                    let cleanTitle = (r.title || "Roblox Game").replace(/\s*[|\-–]\s*(Play on Roblox|Roblox).*$/i, "").trim();
+                                    if (cleanTitle.length < 3) cleanTitle = r.title || "Roblox Game";
+                                    allResults.push({
+                                        id: pid,
+                                        placeId: pid,
+                                        name: cleanTitle,
+                                        creator: "From web",
+                                        playing: 0,
+                                        url: "https://www.roblox.com/games/" + pid,
+                                        snippet: (r.content || "").slice(0, 120)
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
-        } catch (e) { /* continue to fallback */ }
+        } catch (e) { /* continue */ }
     }
 
-    // METHOD 2: Roblox legacy API (fallback kung 0 results sa Tavily)
+    // STEP 2: Roblox legacy API with smart name variations
     if (allResults.length < 3) {
         try {
-            const legacyUrl = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
-            const legacyResp = await fetch(legacyUrl, {
-                headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-            });
-            if (legacyResp.ok) {
-                const legacyData = await legacyResp.json();
-                if (Array.isArray(legacyData.games)) {
-                    for (const g of legacyData.games) {
-                        if (g.placeId && !seenIds.has(String(g.placeId))) {
-                            seenIds.add(String(g.placeId));
-                            allResults.push({
-                                id: String(g.universeId || g.placeId),
-                                placeId: g.placeId,
-                                name: g.name || "Untitled",
-                                creator: g.creatorName || "Unknown",
-                                playing: g.playerCount || 0,
-                                url: "https://www.roblox.com/games/" + g.placeId
-                            });
+            const variations = [query];
+            const lower = query.toLowerCase().replace(/\s+/g, '');
+            
+            // Known Roblox games (common typos → correct name)
+            const knownGames = {
+                "growagarden": "Grow a Garden",
+                "growgarden": "Grow a Garden",
+                "growa": "Grow a Garden",
+                "bloxfruits": "Blox Fruits",
+                "bloxfruit": "Blox Fruits",
+                "adoptme": "Adopt Me",
+                "stealabrainrot": "Steal a Brainrot",
+                "stealabrain": "Steal a Brainrot",
+                "dresstoimpress": "Dress to Impress",
+                "dressto": "Dress to Impress",
+                "murder": "Murder Mystery 2",
+                "mm2": "Murder Mystery 2",
+                "petssim": "Pet Simulator",
+                "petsim": "Pet Simulator",
+                "towerofhell": "Tower of Hell",
+                "toh": "Tower of Hell",
+                "rainbowfriends": "Rainbow Friends",
+                "brookhaven": "Brookhaven",
+                "jailbreak": "Jailbreak",
+                "arsenal": "Arsenal",
+                "doors": "Doors",
+                "piggy": "Piggy",
+                "evade": "Evade",
+                "combatwarriors": "Combat Warriors",
+                "flee": "Flee the Facility",
+            };
+            
+            if (knownGames[lower]) variations.push(knownGames[lower]);
+            
+            // Auto-split run-together names (bloxfruits → blox fruits)
+            if (!query.includes(' ') && query.length > 5 && query.length < 25) {
+                // Try every 3-8 char split point
+                for (let i = 3; i < query.length - 2; i++) {
+                    variations.push(query.slice(0, i) + ' ' + query.slice(i));
+                    variations.push(query.slice(0, i).toLowerCase() + ' ' + query.slice(i));
+                }
+            }
+            
+            // Add lowercase version
+            variations.push(query.toLowerCase());
+            variations.push(query + ' roblox');
+            
+            const tried = new Set();
+            for (const q of variations) {
+                const key = q.toLowerCase().replace(/\s+/g, '');
+                if (tried.has(key)) continue;
+                tried.add(key);
+                
+                const legacyUrl = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(q) + '&model.maxRows=20';
+                try {
+                    const legacyResp = await fetch(legacyUrl, {
+                        headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+                    });
+                    if (legacyResp.ok) {
+                        const legacyData = await legacyResp.json();
+                        if (Array.isArray(legacyData.games)) {
+                            for (const g of legacyData.games) {
+                                if (g.placeId && !seenIds.has(String(g.placeId))) {
+                                    seenIds.add(String(g.placeId));
+                                    allResults.push({
+                                        id: String(g.universeId || g.placeId),
+                                        placeId: g.placeId,
+                                        name: g.name || "Untitled",
+                                        creator: g.creatorName || "Unknown",
+                                        playing: g.playerCount || 0,
+                                        url: "https://www.roblox.com/games/" + g.placeId
+                                    });
+                                }
+                            }
                         }
                     }
-                }
+                } catch (e) { /* continue */ }
+                if (allResults.length >= 8) break;
             }
         } catch (e) { /* ignore */ }
     }
