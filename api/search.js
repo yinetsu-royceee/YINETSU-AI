@@ -30,58 +30,128 @@ export default async function handler(req, res) {
     }
 }
 
+// ============================================
+// ROBLOX AUDIO SEARCH
+// ============================================
 async function searchAudio(query, res) {
     try {
         const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
         const response = await fetch(url, {
             headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
         });
-        if (!response.ok) return res.status(200).json({ query, type: "audio", count: 0, results: [], note: "Roblox " + response.status });
+        if (!response.ok) {
+            return res.status(200).json({ query: query, type: "audio", count: 0, results: [], note: "Roblox " + response.status });
+        }
         const data = await response.json();
         const results = [];
         if (Array.isArray(data.data)) {
             for (let i = 0; i < data.data.length; i++) {
                 const item = data.data[i];
-                if (item && item.id) results.push({
-                    id: String(item.id), name: item.name || "Untitled",
-                    creator: item.creatorName || "Unknown", duration: item.duration || 0,
-                    url: "https://www.roblox.com/library/" + item.id
-                });
+                if (item && item.id) {
+                    results.push({
+                        id: String(item.id),
+                        name: item.name || "Untitled",
+                        creator: item.creatorName || "Unknown",
+                        duration: item.duration || 0,
+                        url: "https://www.roblox.com/library/" + item.id
+                    });
+                }
             }
         }
-        return res.status(200).json({ query, type: "audio", count: results.length, results: results.slice(0, 12) });
+        return res.status(200).json({ query: query, type: "audio", count: results.length, results: results.slice(0, 12) });
     } catch (err) {
-        return res.status(200).json({ query, type: "audio", count: 0, results: [], error: String(err && err.message ? err.message : err) });
+        return res.status(200).json({ query: query, type: "audio", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
+// ============================================
+// GAME SEARCH — Smart: Tavily primary, Roblox fallback
+// ============================================
 async function searchGame(query, res) {
-    try {
-        const url = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-        });
-        if (!response.ok) return res.status(200).json({ query, type: "game", count: 0, results: [], note: "Roblox " + response.status });
-        const data = await response.json();
-        const results = [];
-        if (Array.isArray(data.games)) {
-            for (let i = 0; i < data.games.length; i++) {
-                const g = data.games[i];
-                results.push({
-                    id: String(g.universeId || g.placeId || ""),
-                    name: g.name || "Untitled",
-                    creator: g.creatorName || "Unknown",
-                    playing: g.playerCount || 0,
-                    url: g.placeId ? "https://www.roblox.com/games/" + g.placeId : ""
-                });
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    const allResults = [];
+    const seenIds = new Set();
+
+    // METHOD 1: Tavily (universal, fuzzy matching)
+    if (tavilyKey && tavilyKey.length > 10) {
+        try {
+            const tavilyResp = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + tavilyKey
+                },
+                body: JSON.stringify({
+                    query: query + " roblox game",
+                    search_depth: "advanced",
+                    max_results: 10
+                })
+            });
+            if (tavilyResp.ok) {
+                const tavilyData = await tavilyResp.json();
+                if (Array.isArray(tavilyData.results)) {
+                    for (const r of tavilyData.results) {
+                        const url = r.url || "";
+                        const placeMatch = url.match(/roblox\.com\/games\/(\d+)/);
+                        if (placeMatch) {
+                            const placeId = placeMatch[1];
+                            if (!seenIds.has(placeId)) {
+                                seenIds.add(placeId);
+                                allResults.push({
+                                    id: placeId,
+                                    placeId: placeId,
+                                    name: r.title || "Roblox Game",
+                                    creator: "From web",
+                                    playing: 0,
+                                    url: "https://www.roblox.com/games/" + placeId,
+                                    snippet: (r.content || "").slice(0, 120)
+                                });
+                            }
+                        }
+                    }
+                }
             }
-        }
-        return res.status(200).json({ query, type: "game", count: results.length, results: results.slice(0, 10) });
-    } catch (err) {
-        return res.status(200).json({ query, type: "game", count: 0, results: [], error: String(err && err.message ? err.message : err) });
+        } catch (e) { /* continue to fallback */ }
     }
+
+    // METHOD 2: Roblox legacy API (fallback kung 0 results sa Tavily)
+    if (allResults.length < 3) {
+        try {
+            const legacyUrl = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
+            const legacyResp = await fetch(legacyUrl, {
+                headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+            });
+            if (legacyResp.ok) {
+                const legacyData = await legacyResp.json();
+                if (Array.isArray(legacyData.games)) {
+                    for (const g of legacyData.games) {
+                        if (g.placeId && !seenIds.has(String(g.placeId))) {
+                            seenIds.add(String(g.placeId));
+                            allResults.push({
+                                id: String(g.universeId || g.placeId),
+                                placeId: g.placeId,
+                                name: g.name || "Untitled",
+                                creator: g.creatorName || "Unknown",
+                                playing: g.playerCount || 0,
+                                url: "https://www.roblox.com/games/" + g.placeId
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    return res.status(200).json({
+        query: query, type: "game",
+        count: allResults.length,
+        results: allResults.slice(0, 12)
+    });
 }
 
+// ============================================
+// USER SEARCH
+// ============================================
 async function searchUser(query, res) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
@@ -110,7 +180,7 @@ async function searchUser(query, res) {
 }
 
 // ============================================
-// SCRIPT SEARCH — Fetch pages + extract loadstrings
+// SCRIPT SEARCH — Tavily + Fetch + Extract
 // ============================================
 async function searchScript(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
@@ -134,18 +204,13 @@ async function searchScript(query, res) {
                 const tavilyData = await tavilyResp.json();
                 if (Array.isArray(tavilyData.results)) {
                     for (const r of tavilyData.results) {
-                        searchResults.push({
-                            title: r.title || "Result",
-                            url: r.url || "",
-                            snippet: r.content || ""
-                        });
+                        searchResults.push({ title: r.title || "Result", url: r.url || "", snippet: r.content || "" });
                     }
                 }
             }
         } catch (e) { /* ignore */ }
     }
 
-    // Fetch each page and extract loadstrings
     const extractedScripts = [];
     const seenCodes = new Set();
 
@@ -194,7 +259,6 @@ function extractLoadstrings(text) {
     const scripts = [];
     if (!text || typeof text !== 'string') return scripts;
 
-    // Patterns — catch full URLs
     const patterns = [
         /loadstring\s*\(\s*game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s]{20,}?)["']\s*\)\s*\)/g,
         /game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s]{20,}?)["']\s*\)/g
@@ -205,7 +269,6 @@ function extractLoadstrings(text) {
         while ((match = pattern.exec(text)) !== null) {
             let url = match[1].trim();
             url = url.replace(/[,\.\)\]\>"']+$/, '');
-            // Decode HTML entities
             url = url.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#x2F;/g, '/');
             if (url && url.startsWith('http') && url.length > 25 && url.length < 500) {
                 const fullCode = 'loadstring(game:HttpGet("' + url + '"))()';
@@ -213,7 +276,6 @@ function extractLoadstrings(text) {
             }
         }
     }
-
     return scripts;
 }
 
@@ -239,6 +301,9 @@ function analyzeScriptSafety(code) {
     return { level, score, flags };
 }
 
+// ============================================
+// WEB SEARCH — Tavily → Wikipedia → Fallback
+// ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey && tavilyKey.length > 10) {
