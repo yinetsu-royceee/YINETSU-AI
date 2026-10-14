@@ -31,6 +31,9 @@ export default async function handler(req, res) {
     }
 }
 
+// ============================================
+// ROBLOX AUDIO SEARCH
+// ============================================
 async function searchAudio(query, res) {
     try {
         const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
@@ -62,6 +65,9 @@ async function searchAudio(query, res) {
     }
 }
 
+// ============================================
+// ROBLOX GAME SEARCH
+// ============================================
 async function searchGame(query, res) {
     try {
         const url = 'https://games.roblox.com/v1/games/list?model.keyword=' + encodeURIComponent(query) + '&model.maxRows=20';
@@ -91,6 +97,9 @@ async function searchGame(query, res) {
     }
 }
 
+// ============================================
+// ROBLOX USER SEARCH
+// ============================================
 async function searchUser(query, res) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
@@ -144,54 +153,65 @@ async function searchUser(query, res) {
 }
 
 // ============================================
-// SCRIPT SEARCH — Extract loadstring from snippets
+// SCRIPT SEARCH — Multi-query + Raw content extraction
 // ============================================
 async function searchScript(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     let searchResults = [];
 
-    // Search via Tavily
     if (tavilyKey && tavilyKey.length > 10) {
-        try {
-            const tavilyResp = await fetch('https://api.tavily.com/search', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + tavilyKey
-                },
-                body: JSON.stringify({
-                    query: query + " roblox script loadstring",
-                    search_depth: "advanced",
-                    max_results: 10,
-                    include_answer: false
-                })
-            });
-            if (tavilyResp.ok) {
-                const tavilyData = await tavilyResp.json();
-                if (Array.isArray(tavilyData.results)) {
-                    for (const r of tavilyData.results) {
-                        searchResults.push({
-                            title: r.title || "Result",
-                            url: r.url || "",
-                            snippet: r.content || ""
-                        });
+        // Multiple targeted queries for better extraction
+        const queries = [
+            query + " roblox script loadstring site:pastebin.com",
+            query + " roblox script raw.githubusercontent.com",
+            query + " roblox script loadstring",
+            query + " " + query + " script hub"
+        ];
+
+        for (const q of queries) {
+            try {
+                const tavilyResp = await fetch('https://api.tavily.com/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + tavilyKey
+                    },
+                    body: JSON.stringify({
+                        query: q,
+                        search_depth: "advanced",
+                        max_results: 5,
+                        include_answer: false,
+                        include_raw_content: true
+                    })
+                });
+                if (tavilyResp.ok) {
+                    const tavilyData = await tavilyResp.json();
+                    if (Array.isArray(tavilyData.results)) {
+                        for (const r of tavilyData.results) {
+                            searchResults.push({
+                                title: r.title || "Result",
+                                url: r.url || "",
+                                snippet: r.content || "",
+                                raw: r.raw_content || ""
+                            });
+                        }
                     }
                 }
-            }
-        } catch (e) { /* ignore */ }
+            } catch (e) { /* continue */ }
+            if (searchResults.length >= 15) break;
+        }
     }
 
-    // Extract loadstring patterns from all snippets
+    // Extract loadstrings from snippets + raw content
     const extractedScripts = [];
-    const seenUrls = new Set();
+    const seenCodes = new Set();
 
     for (const result of searchResults) {
-        const snippet = result.snippet || "";
-        const patterns = extractLoadstrings(snippet);
+        const combined = (result.snippet || "") + "\n\n" + (result.raw || "");
+        const patterns = extractLoadstrings(combined);
         for (const code of patterns) {
-            const hash = code.slice(0, 100);
-            if (!seenUrls.has(hash)) {
-                seenUrls.add(hash);
+            if (!seenCodes.has(code)) {
+                seenCodes.add(code);
                 extractedScripts.push({
                     code: code,
                     source: result.url,
@@ -205,30 +225,37 @@ async function searchScript(query, res) {
     return res.status(200).json({
         query: query,
         type: "script",
-        searchResults: searchResults.slice(0, 5),
+        searchResults: searchResults.slice(0, 5).map(r => ({
+            title: r.title,
+            url: r.url,
+            snippet: (r.snippet || "").slice(0, 200)
+        })),
         extractedCount: extractedScripts.length,
-        scripts: extractedScripts.slice(0, 8)
+        scripts: extractedScripts.slice(0, 10)
     });
 }
 
+// ============================================
+// LOADSTRING EXTRACTOR (Lenient)
+// ============================================
 function extractLoadstrings(text) {
     const scripts = [];
-    
-    // Pattern 1: loadstring(game:HttpGet("URL"))
-    // Pattern 2: loadstring(game:HttpGet('URL'))
-    // Pattern 3: loadstring(game:HttpGetAsync("URL"))
+    if (!text || typeof text !== 'string') return scripts;
+
+    // Lenient patterns — match even partial URLs
     const patterns = [
-        /loadstring\s*\(\s*game\s*:\s*HttpGet\s*\(\s*["']([^"']+)["']\s*\)\s*\)/g,
-        /loadstring\s*\(\s*game\s*:\s*HttpGetAsync\s*\(\s*["']([^"']+)["']\s*\)\s*\)/g,
-        /game\s*:\s*HttpGet\s*\(\s*["'](https?:\/\/[^"']+)["']\s*\)/g
+        /loadstring\s*\(\s*game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s\)]{20,})/g,
+        /game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s\)]{20,})/g,
+        /game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"']+)/g
     ];
 
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(text)) !== null) {
-            const url = match[1];
-            if (url && url.startsWith('http')) {
-                // Rebuild the loadstring line
+            let url = match[1].trim();
+            // Clean trailing punctuation
+            url = url.replace(/[,\.\)\]\>"']+$/, '');
+            if (url && url.startsWith('http') && url.length > 20) {
                 const fullCode = 'loadstring(game:HttpGet("' + url + '"))()';
                 if (!scripts.includes(fullCode)) {
                     scripts.push(fullCode);
@@ -237,9 +264,27 @@ function extractLoadstrings(text) {
         }
     }
 
+    // Fallback: extract any raw URLs that look like script hosts
+    const urlPattern = /https?:\/\/[^\s"'\)\]\}<>]+/g;
+    const urlMatches = text.match(urlPattern) || [];
+    for (const url of urlMatches) {
+        const lower = url.toLowerCase();
+        if ((lower.includes('pastebin') || lower.includes('githubusercontent') || 
+             lower.includes('raw.') || lower.includes('gist') || 
+             lower.includes('rentry') || lower.includes('hastebin')) && url.length > 25) {
+            const fullCode = 'loadstring(game:HttpGet("' + url + '"))()';
+            if (!scripts.includes(fullCode)) {
+                scripts.push(fullCode);
+            }
+        }
+    }
+
     return scripts;
 }
 
+// ============================================
+// SAFETY ANALYZER
+// ============================================
 function analyzeScriptSafety(code, host) {
     const lower = code.toLowerCase();
     const flags = [];
