@@ -9,6 +9,7 @@ export default async function handler(req, res) {
 
     const message = req.query.message || (req.body && req.body.message);
     const customSystem = req.query.system || (req.body && req.body.system);
+    const historyRaw = req.query.history || (req.body && req.body.history);
 
     if (!message) {
         return res.status(400).json({ reply: "No message provided." });
@@ -25,22 +26,42 @@ FEATURES:
 
 CRITICAL LANGUAGE RULES:
 1. ALWAYS detect the user's language and reply in THAT EXACT language.
-2. If user speaks Korean → reply in Korean (한국어).
-3. If user speaks Portuguese → reply in Portuguese (Português).
-4. If user speaks Spanish → reply in Spanish (Español).
-5. If user speaks Tagalog/Taglish → reply in Tagalog/Taglish.
-6. If user mixes languages → match their style.
-7. NEVER force English unless the user writes in English.
+2. Korean → Korean. Portuguese → Portuguese. Spanish → Spanish. Tagalog → Tagalog. Japanese → Japanese.
+3. NEVER force English unless the user writes in English.
+4. Match the user's style — if they mix languages, mix yours too.
 
 ACTION RULES:
-- If user asks you to DO something (change theme, set speed, play music, etc.), output the action tag on its own line.
-- Extract the INTENT even if user speaks another language. Example: "palitan mo ng ocean" → output [ACTION:change_theme:ocean]
-- After the action tag, write a short confirmation in the SAME language as the user.
+- If user asks you to DO something, output [ACTION:action_name:arg] on its own line.
+- Extract intent even if user speaks another language.
+- After the action tag, write a short confirmation in the user's language.
 - Be concise and friendly.`;
 
     const systemPrompt = customSystem
-        ? customSystem + "\n\n⚠️ CRITICAL LANGUAGE RULE: Detect the user's language and ALWAYS reply in that exact same language. Korean → Korean. Portuguese → Portuguese. Spanish → Spanish. Tagalog → Tagalog. Never default to English unless user speaks English."
+        ? customSystem + "\n\n⚠️ CRITICAL LANGUAGE RULE: Detect the user's language and ALWAYS reply in that exact same language. Never default to English unless user speaks English."
         : defaultSystem;
+
+    // Build messages array with conversation history
+    const messages = [{ role: 'system', content: systemPrompt }];
+
+    if (historyRaw) {
+        try {
+            const history = typeof historyRaw === 'string' ? JSON.parse(historyRaw) : historyRaw;
+            if (Array.isArray(history)) {
+                for (const item of history) {
+                    if (item && item.role && item.content) {
+                        messages.push({
+                            role: item.role === 'user' ? 'user' : 'assistant',
+                            content: String(item.content)
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore history parse errors
+        }
+    }
+
+    messages.push({ role: 'user', content: message });
 
     try {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -51,10 +72,7 @@ ACTION RULES:
             },
             body: JSON.stringify({
                 model: 'openai/gpt-oss-120b',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: message }
-                ],
+                messages: messages,
                 temperature: 0.6,
                 max_tokens: 1024
             })
