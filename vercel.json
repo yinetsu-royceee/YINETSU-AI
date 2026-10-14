@@ -8,10 +8,6 @@
     {
       "src": "api/search.js",
       "use": "@vercel/node"
-    },
-    {
-      "src": "api/tavily-test.js",
-      "use": "@vercel/node"
     }
   ],
   "routes": [
@@ -22,10 +18,6 @@
     {
       "src": "/api/search",
       "dest": "api/search.js"
-    },
-    {
-      "src": "/api/tavily-test",
-      "dest": "api/tavily-test.js"
     }
   ]
 }
