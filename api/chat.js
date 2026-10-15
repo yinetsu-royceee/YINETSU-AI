@@ -1040,7 +1040,8 @@ GERMAN:
 
 🩹 ERROR RECOVERY: If user's message is unclear or has typos, suggest 2-3 common commands they might mean.`;
 
-    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction;
+    // ═══ FORCE BASE SYSTEM (ignore customSystem from Lua) ═══
+const systemPrompt = baseSystem;
 
     let history = [];
     if (historyRaw) {
