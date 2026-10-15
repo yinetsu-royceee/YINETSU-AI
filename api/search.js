@@ -62,94 +62,51 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — OFFICIAL API + WEB FALLBACK
+// GAME SEARCH — OFFICIAL ROBLOX GAMES API (FIXED & SORTED)
 // ============================================
 async function searchGame(query, res) {
-    const results = [];
-    const seenIds = new Set();
-
     try {
-        // 1. Unang subukan ang Opisyal na Roblox Games API para makuha ang tamang laro at player count
-        const url = 'https://games.roblox.com/v1/games/list?keyword=' + encodeURIComponent(query) + '&model.maxRows=10';
+        const url = 'https://games.roblox.com/v1/games/list?keyword=' + encodeURIComponent(query) + '&model.maxRows=15';
         const response = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
         
-        if (response.ok) {
-            const data = await response.json();
-            if (Array.isArray(data.games)) {
-                for (let i = 0; i < data.games.length; i++) {
-                    const game = data.games[i];
-                    if (game && game.rootPlaceId) {
-                        const pid = String(game.rootPlaceId);
-                        if (!seenIds.has(pid)) {
-                            seenIds.add(pid);
-                            results.push({
-                                id: pid,
-                                placeId: pid,
-                                name: game.name || "Untitled Game",
-                                creator: game.creatorName || "Unknown",
-                                playing: game.playerCount || game.playing || 0,
-                                url: "https://www.roblox.com/games/" + pid,
-                                snippet: "Creator: " + (game.creatorName || "Unknown") + " · Active: " + (game.playerCount || 0)
-                            });
-                        }
-                    }
+        if (!response.ok) {
+            return res.status(200).json({ query: query, type: "game", count: 0, results: [] });
+        }
+
+        const data = await response.json();
+        const results = [];
+
+        if (Array.isArray(data.games)) {
+            for (let i = 0; i < data.games.length; i++) {
+                const game = data.games[i];
+                if (game && game.rootPlaceId) {
+                    results.push({
+                        id: String(game.rootPlaceId),
+                        placeId: String(game.rootPlaceId),
+                        name: game.name || "Untitled Game",
+                        creator: game.creatorName || "Unknown",
+                        playing: game.playerCount || game.playing || 0,
+                        url: "https://www.roblox.com/games/" + game.rootPlaceId,
+                        snippet: "Creator: " + (game.creatorName || "Unknown") + " · Active: " + (game.playerCount || 0)
+                    });
                 }
             }
         }
-    } catch (e) { /* ignore and fallback */ }
 
-    // 2. Kung sakaling kulang ang makuha, gamitin ang Tavily/DDG search bilang backup para hindi mawalan ng resulta
-    if (results.length < 3) {
-        const tavilyKey = process.env.TAVILY_API_KEY;
-        try {
-            if (tavilyKey && tavilyKey.length > 10) {
-                const r1 = await fetch('https://api.tavily.com/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
-                    body: JSON.stringify({
-                        query: query + " roblox game",
-                        search_depth: "advanced",
-                        max_results: 5,
-                        include_domains: ["roblox.com"]
-                    })
-                });
-                if (r1.ok) {
-                    const d1 = await r1.json();
-                    if (Array.isArray(d1.results)) {
-                        for (const r of d1.results) {
-                            const matches = (r.url || "").match(/roblox\.com\/games\/(\d{6,})/g) || [];
-                            for (const m of matches) {
-                                const idMatch = m.match(/(\d{6,})/);
-                                if (idMatch) {
-                                    const pid = idMatch[1];
-                                    if (!seenIds.has(pid)) {
-                                        seenIds.add(pid);
-                                        results.push({
-                                            id: pid,
-                                            placeId: pid,
-                                            name: (r.title || "Roblox Game").replace(/\s*[|\-–].*$/, "").trim(),
-                                            creator: "From web",
-                                            playing: 0,
-                                            url: "https://www.roblox.com/games/" + pid,
-                                            snippet: (r.content || "").slice(0, 120)
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e) { /* ignore */ }
+        // I-sort para laging unahin ang original game na may pinakamataas na player count
+        results.sort((a, b) => b.playing - a.playing);
+
+        return res.status(200).json({ 
+            query: query, 
+            type: "game", 
+            count: results.length, 
+            results: results.slice(0, 10) 
+        });
+    } catch (err) {
+        return res.status(200).json({ query: query, type: "game", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
-
-    return res.status(200).json({
-        query: query, type: "game",
-        count: results.length,
-        results: results.slice(0, 12)
-    });
 }
 
 // ============================================
