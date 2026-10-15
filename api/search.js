@@ -62,11 +62,11 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — OFFICIAL ROBLOX GAMES API (FIXED & SORTED)
+// GAME SEARCH — ROBLOX GAMES SEARCH V2 API (FIXED)
 // ============================================
 async function searchGame(query, res) {
     try {
-        const url = 'https://games.roblox.com/v1/games/list?keyword=' + encodeURIComponent(query) + '&model.maxRows=15';
+        const url = 'https://games.roblox.com/v1/games/search?keyword=' + encodeURIComponent(query) + '&maxRows=15';
         const response = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
@@ -78,24 +78,26 @@ async function searchGame(query, res) {
         const data = await response.json();
         const results = [];
 
-        if (Array.isArray(data.games)) {
-            for (let i = 0; i < data.games.length; i++) {
-                const game = data.games[i];
-                if (game && game.rootPlaceId) {
+        const gamesList = data.games || data.data || [];
+        if (Array.isArray(gamesList)) {
+            for (let i = 0; i < gamesList.length; i++) {
+                const game = gamesList[i];
+                const placeId = game.rootPlaceId || game.placeId || game.id;
+                if (placeId) {
                     results.push({
-                        id: String(game.rootPlaceId),
-                        placeId: String(game.rootPlaceId),
-                        name: game.name || "Untitled Game",
-                        creator: game.creatorName || "Unknown",
-                        playing: game.playerCount || game.playing || 0,
-                        url: "https://www.roblox.com/games/" + game.rootPlaceId,
+                        id: String(placeId),
+                        placeId: String(placeId),
+                        name: game.name || game.title || "Untitled Game",
+                        creator: game.creatorName || game.builder || "Unknown",
+                        playing: game.playerCount || game.playing || game.activePlayers || 0,
+                        url: "https://www.roblox.com/games/" + placeId,
                         snippet: "Creator: " + (game.creatorName || "Unknown") + " · Active: " + (game.playerCount || 0)
                     });
                 }
             }
         }
 
-        // I-sort para laging unahin ang original game na may pinakamataas na player count
+        // I-sort para unahin ang original na may pinakamataas na player count
         results.sort((a, b) => b.playing - a.playing);
 
         return res.status(200).json({ 
@@ -135,7 +137,7 @@ async function searchUser(query, res) {
         }
         return res.status(200).json({ query, type: "user", count: 0, results: [] });
     } catch (err) {
-        return res.status(200).json({ query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
+        return res.status(200).json({ query: query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
