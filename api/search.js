@@ -1,3 +1,60 @@
+// ═══════════════════════════════════════════════════════════════
+// YINETSU SEARCH — Optimized (Oct 2026)
+// Features: Caching · Timeout · Error Handling · Smart Sources
+// ═══════════════════════════════════════════════════════════════
+
+const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
+const TAVILY_TIMEOUT_MS = 8000;
+
+// ═══ CACHING (in-memory, per search type TTL) ═══
+const SEARCH_CACHE = new Map();
+const CACHE_TTL = {
+    audio:  60 * 60 * 1000,   // 1 hour
+    game:   30 * 60 * 1000,   // 30 min
+    user:   15 * 60 * 1000,   // 15 min
+    web:    15 * 60 * 1000,   // 15 min
+    script: 60 * 60 * 1000,   // 1 hour
+};
+
+function makeSearchKey(type, query) {
+    return `${type}::${query.toLowerCase().trim()}`;
+}
+
+function getCachedSearch(key, type) {
+    const entry = SEARCH_CACHE.get(key);
+    if (!entry) return null;
+    const ttl = CACHE_TTL[type] || 5 * 60 * 1000;
+    if (Date.now() - entry.time > ttl) {
+        SEARCH_CACHE.delete(key);
+        return null;
+    }
+    return entry.data;
+}
+
+function setCachedSearch(key, data) {
+    SEARCH_CACHE.set(key, { data, time: Date.now() });
+    if (SEARCH_CACHE.size > 200) {
+        const now = Date.now();
+        for (const [k, v] of SEARCH_CACHE.entries()) {
+            const type = k.split('::')[0];
+            const ttl = CACHE_TTL[type] || 5 * 60 * 1000;
+            if (now - v.time > ttl) SEARCH_CACHE.delete(k);
+        }
+    }
+}
+
+// ═══ FETCH WITH TIMEOUT ═══
+async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// ═══ MAIN HANDLER ═══
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -16,34 +73,52 @@ export default async function handler(req, res) {
         });
     }
 
+    // ═══ CHECK CACHE FIRST ═══
+    const cacheKey = makeSearchKey(type, query);
+    const cached = getCachedSearch(cacheKey, type);
+    if (cached) {
+        console.log(`[Yinetsu Search] ⚡ CACHE HIT: ${type}/${query}`);
+        return res.status(200).json({
+            ...cached,
+            cached: true
+        });
+    }
+
     try {
-        if (type === "audio" || type === "music") return await searchAudio(query, res);
-        if (type === "game") return await searchGame(query, res);
-        if (type === "user") return await searchUser(query, res);
-        if (type === "script") return await searchScript(query, res);
-        return await searchWeb(query, res);
+        let result;
+        if (type === "audio" || type === "music") result = await searchAudio(query);
+        else if (type === "game") result = await searchGame(query);
+        else if (type === "user") result = await searchUser(query);
+        else if (type === "script") result = await searchScript(query);
+        else result = await searchWeb(query);
+
+        // Cache the result
+        if (result) setCachedSearch(cacheKey, result);
+
+        return res.status(200).json(result);
     } catch (err) {
         return res.status(200).json({
-            query: query, type: type, count: 0, results: [],
+            query, type, count: 0, results: [],
             error: String(err && err.message ? err.message : err)
         });
     }
 }
 
-// ============================================
-// AUDIO SEARCH — Universal Multi-Source
-// ============================================
-async function searchAudio(query, res) {
+// ═══════════════════════════════════════════════════════════════
+// AUDIO SEARCH — Multi-source with smart Tavily usage
+// ═══════════════════════════════════════════════════════════════
+async function searchAudio(query) {
     const allResults = [];
     const seenIds = new Set();
     const tavilyKey = process.env.TAVILY_API_KEY;
 
+    // ── SOURCE 1: Toolbox (FREE) ──
     async function searchToolbox(keyword) {
         try {
             const url = 'https://apis.roblox.com/toolbox-service/v1/marketplace/5?keyword=' + encodeURIComponent(keyword) + '&limit=30';
-            const response = await fetch(url, {
+            const response = await fetchWithTimeout(url, {
                 headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-            });
+            }, 5000);
             if (!response.ok) return;
             const text = await response.text();
             let data;
@@ -73,12 +148,13 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
+    // ── SOURCE 2: Catalog (FREE) ──
     async function searchCatalog(keyword) {
         try {
             const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(keyword) + '&Limit=30&SortType=Relevance';
-            const response = await fetch(url, {
+            const response = await fetchWithTimeout(url, {
                 headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-            });
+            }, 5000);
             if (!response.ok) return;
             const data = await response.json();
             if (!Array.isArray(data.data)) return;
@@ -102,94 +178,79 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
+    // ── SOURCE 3: Web (TAVILY — only 1 query, not 3!) ──
     async function searchWebAudio(keyword) {
         if (!tavilyKey || tavilyKey.length < 10) return;
 
-        const queries = [
-            keyword + " roblox song ID list",
-            keyword + " roblox music code",
-            '"' + keyword + '" roblox audio id',
-        ];
+        try {
+            const resp = await fetchWithTimeout(TAVILY_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + tavilyKey
+                },
+                body: JSON.stringify({
+                    query: `${keyword} roblox song ID list`,
+                    search_depth: "advanced",
+                    max_results: 10
+                })
+            }, TAVILY_TIMEOUT_MS);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!Array.isArray(data.results)) return;
 
-        for (const q of queries) {
-            try {
-                const resp = await fetch('https://api.tavily.com/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + tavilyKey
-                    },
-                    body: JSON.stringify({
-                        query: q,
-                        search_depth: "advanced",
-                        max_results: 10
-                    })
-                });
-                if (!resp.ok) continue;
-                const data = await resp.json();
-                if (!Array.isArray(data.results)) continue;
+            for (const r of data.results) {
+                const content = r.content || "";
 
-                for (const r of data.results) {
-                    const content = r.content || "";
-
-                    const pattern1 = /([A-Za-z0-9\s'\.\,\!\?\&\-\(\)]{3,80}?)\s*[-–:]\s*(\d{6,15})/g;
-                    let match;
-                    while ((match = pattern1.exec(content)) !== null) {
-                        const songName = match[1].trim();
-                        const pid = match[2];
-                        if (songName.length > 2 && !seenIds.has(pid)) {
-                            seenIds.add(pid);
-                            allResults.push({
-                                id: pid,
-                                name: songName,
-                                creator: "From web",
-                                duration: 0,
-                                isVerified: false,
-                                source: "web",
-                                url: "https://www.roblox.com/library/" + pid
-                            });
-                        }
-                    }
-
-                    const idPattern = /(\d{6,15})/g;
-                    while ((match = idPattern.exec(content)) !== null) {
-                        const pid = match[1];
-                        const num = parseInt(pid);
-                        if (num < 100000 || num > 999999999999999) continue;
-                        if (seenIds.has(pid)) continue;
-
-                        const idx = match.index;
-                        const before = content.substring(Math.max(0, idx - 100), idx);
-                        const nameMatch = before.match(/([A-Za-z][A-Za-z0-9\s'\.\,\!\?]{3,60})\s*[-–:]?\s*$/);
-                        let songName = "Audio #" + pid.slice(-6);
-                        if (nameMatch && nameMatch[1]) {
-                            let candidate = nameMatch[1].trim();
-                            if (candidate.length > 3 && !candidate.match(/^(ID|Code|Roblox|Music|Song)$/i)) {
-                                songName = candidate;
-                            }
-                        }
-
+                const pattern1 = /([A-Za-z0-9\s'\.\,\!\?\&\-\(\)]{3,80}?)\s*[-–:]\s*(\d{6,15})/g;
+                let match;
+                while ((match = pattern1.exec(content)) !== null) {
+                    const songName = match[1].trim();
+                    const pid = match[2];
+                    if (songName.length > 2 && !seenIds.has(pid)) {
                         seenIds.add(pid);
                         allResults.push({
-                            id: pid,
-                            name: songName,
-                            creator: "From web",
-                            duration: 0,
-                            isVerified: false,
-                            source: "web",
+                            id: pid, name: songName, creator: "From web",
+                            duration: 0, isVerified: false, source: "web",
                             url: "https://www.roblox.com/library/" + pid
                         });
                     }
                 }
-            } catch (e) { /* continue */ }
-            if (allResults.length >= 30) break;
-        }
+
+                const idPattern = /(\d{6,15})/g;
+                while ((match = idPattern.exec(content)) !== null) {
+                    const pid = match[1];
+                    const num = parseInt(pid);
+                    if (num < 100000 || num > 999999999999999) continue;
+                    if (seenIds.has(pid)) continue;
+
+                    const idx = match.index;
+                    const before = content.substring(Math.max(0, idx - 100), idx);
+                    const nameMatch = before.match(/([A-Za-z][A-Za-z0-9\s'\.\,\!\?]{3,60})\s*[-–:]?\s*$/);
+                    let songName = "Audio #" + pid.slice(-6);
+                    if (nameMatch && nameMatch[1]) {
+                        let candidate = nameMatch[1].trim();
+                        if (candidate.length > 3 && !candidate.match(/^(ID|Code|Roblox|Music|Song)$/i)) {
+                            songName = candidate;
+                        }
+                    }
+                    seenIds.add(pid);
+                    allResults.push({
+                        id: pid, name: songName, creator: "From web",
+                        duration: 0, isVerified: false, source: "web",
+                        url: "https://www.roblox.com/library/" + pid
+                    });
+                }
+            }
+        } catch (e) { /* continue */ }
     }
 
+    // ── SMART SOURCE ORDERING ──
     await searchToolbox(query);
     if (allResults.length < 5) await searchCatalog(query);
-    if (allResults.length < 5) await searchWebAudio(query);
+    if (allResults.length < 5) await searchWebAudio(query);  // Only call Tavily if needed
 
+    // ── RELATED TERMS (only if needed) ──
     const lower = query.toLowerCase();
     const relatedTerms = {
         "opm": ["opm", "filipino", "tagalog"],
@@ -202,27 +263,27 @@ async function searchAudio(query, res) {
 
     for (const [key, terms] of Object.entries(relatedTerms)) {
         if (lower.includes(key)) {
-            for (const term of terms.slice(1, 3)) {
+            for (const term of terms.slice(1, 2)) {  // Only 1 related term (not 3)
                 if (!seenIds.has("q_" + term)) {
                     seenIds.add("q_" + term);
                     await searchToolbox(term);
-                    await searchWebAudio(term);
+                    if (allResults.length < 10) await searchWebAudio(term);
                 }
             }
         }
     }
 
-    return res.status(200).json({
-        query: query, type: "audio",
+    return {
+        query, type: "audio",
         count: allResults.length,
         results: allResults.slice(0, 30)
-    });
+    };
 }
 
-// ============================================
-// GAME SEARCH — Universal + Player Count
-// ============================================
-async function searchGame(query, res) {
+// ═══════════════════════════════════════════════════════════════
+// GAME SEARCH — Same as before but with timeout
+// ═══════════════════════════════════════════════════════════════
+async function searchGame(query) {
     const rawResults = [];
     const seenIds = new Set();
     const lowerQuery = query.toLowerCase().trim();
@@ -230,7 +291,7 @@ async function searchGame(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     try {
         if (tavilyKey && tavilyKey.length > 10) {
-            const r1 = await fetch('https://api.tavily.com/search', {
+            const r1 = await fetchWithTimeout(TAVILY_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
                 body: JSON.stringify({
@@ -238,7 +299,7 @@ async function searchGame(query, res) {
                     search_depth: "advanced",
                     max_results: 12
                 })
-            });
+            }, TAVILY_TIMEOUT_MS);
             if (r1.ok) {
                 const d1 = await r1.json();
                 if (Array.isArray(d1.results)) {
@@ -276,15 +337,16 @@ async function searchGame(query, res) {
         });
     }
 
+    // Enrich with player counts
     if (rawResults.length > 0) {
         try {
             const targetGames = rawResults.slice(0, 10);
             const universeMap = {};
             await Promise.all(targetGames.map(async (g) => {
                 try {
-                    const uResp = await fetch(`https://apis.roblox.com/universes/v1/places/${g.placeId}/universe`, {
+                    const uResp = await fetchWithTimeout(`https://apis.roblox.com/universes/v1/places/${g.placeId}/universe`, {
                         headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
+                    }, 5000);
                     if (uResp.ok) {
                         const uData = await uResp.json();
                         if (uData && uData.universeId) universeMap[g.placeId] = String(uData.universeId);
@@ -295,9 +357,9 @@ async function searchGame(query, res) {
             const universeIds = Object.values(universeMap);
             if (universeIds.length > 0) {
                 const gamesUrl = `https://games.roblox.com/v1/games?universeIds=${universeIds.join(",")}`;
-                const gResp = await fetch(gamesUrl, {
+                const gResp = await fetchWithTimeout(gamesUrl, {
                     headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-                });
+                }, 5000);
                 if (gResp.ok) {
                     const gData = await gResp.json();
                     if (gData && Array.isArray(gData.data)) {
@@ -331,19 +393,22 @@ async function searchGame(query, res) {
         return b.playing - a.playing;
     });
 
-    return res.status(200).json({
-        query: query, type: "game",
+    return {
+        query, type: "game",
         count: rawResults.length,
         results: rawResults.slice(0, 12)
-    });
+    };
 }
 
-async function searchUser(query, res) {
+// ═══════════════════════════════════════════════════════════════
+// USER SEARCH (FREE — Roblox API lang)
+// ═══════════════════════════════════════════════════════════════
+async function searchUser(query) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-        });
+        }, 5000);
         if (response.ok) {
             const data = await response.json();
             const results = [];
@@ -357,21 +422,24 @@ async function searchUser(query, res) {
                     });
                 }
             }
-            if (results.length > 0) return res.status(200).json({ query, type: "user", count: results.length, results: results.slice(0, 10) });
+            return { query, type: "user", count: results.length, results: results.slice(0, 10) };
         }
-        return res.status(200).json({ query, type: "user", count: 0, results: [] });
+        return { query, type: "user", count: 0, results: [] };
     } catch (err) {
-        return res.status(200).json({ query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
+        return { query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) };
     }
 }
 
-async function searchScript(query, res) {
+// ═══════════════════════════════════════════════════════════════
+// SCRIPT SEARCH — uses Tavily
+// ═══════════════════════════════════════════════════════════════
+async function searchScript(query) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     let searchResults = [];
 
     if (tavilyKey && tavilyKey.length > 10) {
         try {
-            const tavilyResp = await fetch('https://api.tavily.com/search', {
+            const tavilyResp = await fetchWithTimeout(TAVILY_ENDPOINT, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -382,7 +450,7 @@ async function searchScript(query, res) {
                     search_depth: "advanced",
                     max_results: 8
                 })
-            });
+            }, TAVILY_TIMEOUT_MS);
             if (tavilyResp.ok) {
                 const tavilyData = await tavilyResp.json();
                 if (Array.isArray(tavilyData.results)) {
@@ -400,14 +468,13 @@ async function searchScript(query, res) {
     for (const result of searchResults.slice(0, 6)) {
         if (!result.url) continue;
         try {
-            const pageResp = await fetch(result.url, {
+            const pageResp = await fetchWithTimeout(result.url, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml'
                 },
-                redirect: 'follow',
-                signal: AbortSignal.timeout(8000)
-            });
+                redirect: 'follow'
+            }, 8000);
             if (!pageResp.ok) continue;
             const html = await pageResp.text();
             const patterns = extractLoadstrings(html);
@@ -424,14 +491,14 @@ async function searchScript(query, res) {
         if (extractedScripts.length >= 15) break;
     }
 
-    return res.status(200).json({
-        query: query, type: "script",
+    return {
+        query, type: "script",
         searchResults: searchResults.slice(0, 5).map(r => ({
             title: r.title, url: r.url, snippet: (r.snippet || "").slice(0, 200)
         })),
         extractedCount: extractedScripts.length,
         scripts: extractedScripts.slice(0, 12)
-    });
+    };
 }
 
 function extractLoadstrings(text) {
@@ -476,15 +543,18 @@ function analyzeScriptSafety(code) {
     return { level, score, flags };
 }
 
-async function searchWeb(query, res) {
+// ═══════════════════════════════════════════════════════════════
+// WEB SEARCH — Tavily + Wikipedia fallback
+// ═══════════════════════════════════════════════════════════════
+async function searchWeb(query) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey && tavilyKey.length > 10) {
         try {
-            const tavilyResp = await fetch('https://api.tavily.com/search', {
+            const tavilyResp = await fetchWithTimeout(TAVILY_ENDPOINT, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
                 body: JSON.stringify({ query, search_depth: "basic", max_results: 8, include_answer: true })
-            });
+            }, TAVILY_TIMEOUT_MS);
             if (tavilyResp.ok) {
                 const tavilyData = await tavilyResp.json();
                 const results = [];
@@ -494,25 +564,25 @@ async function searchWeb(query, res) {
                         results.push({ title: r.title || "Result", snippet: r.content || "", url: r.url || "" });
                     }
                 }
-                if (results.length > 0) return res.status(200).json({ query, type: "web", source: "tavily", count: results.length, results: results.slice(0, 8) });
+                if (results.length > 0) return { query, type: "web", source: "tavily", count: results.length, results: results.slice(0, 8) };
             }
         } catch (e) { /* fall through */ }
     }
     try {
         const wikiTitle = encodeURIComponent(query.replace(/ /g, '_'));
         const wikiUrl = 'https://en.wikipedia.org/api/rest_v1/page/summary/' + wikiTitle;
-        const wikiResp = await fetch(wikiUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const wikiResp = await fetchWithTimeout(wikiUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 5000);
         if (wikiResp.ok) {
             const wikiData = await wikiResp.json();
             if (wikiData && wikiData.extract) {
                 let pageUrl = "https://en.wikipedia.org/wiki/" + wikiTitle;
                 if (wikiData.content_urls && wikiData.content_urls.desktop && wikiData.content_urls.desktop.page) pageUrl = wikiData.content_urls.desktop.page;
-                return res.status(200).json({ query, type: "web", source: "wikipedia", count: 1, results: [{ title: wikiData.title || query, snippet: wikiData.extract, url: pageUrl }] });
+                return { query, type: "web", source: "wikipedia", count: 1, results: [{ title: wikiData.title || query, snippet: wikiData.extract, url: pageUrl }] };
             }
         }
     } catch (e) { /* fall through */ }
-    return res.status(200).json({
+    return {
         query, type: "web", source: "fallback", count: 1,
         results: [{ title: 'Search "' + query + '"', snippet: "Click to search online.", url: "https://www.google.com/search?q=" + encodeURIComponent(query) }]
-    });
+    };
 }
