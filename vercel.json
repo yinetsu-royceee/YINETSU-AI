@@ -1,13 +1,13 @@
 {
   "version": 2,
-  "builds": [
-    { "src": "api/chat.js", "use": "@vercel/node" },
-    { "src": "api/search.js", "use": "@vercel/node" },
-    { "src": "api/fetch-script.js", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/api/chat", "dest": "api/chat.js" },
-    { "src": "/api/search", "dest": "api/search.js" },
-    { "src": "/api/fetch-script", "dest": "api/fetch-script.js" }
+  "functions": {
+    "api/chat.js": { "maxDuration": 30 },
+    "api/search.js": { "maxDuration": 30 },
+    "api/fetch-script.js": { "maxDuration": 30 }
+  },
+  "rewrites": [
+    { "source": "/api/chat", "destination": "/api/chat" },
+    { "source": "/api/search", "destination": "/api/search" },
+    { "source": "/api/fetch-script", "destination": "/api/fetch-script" }
   ]
 }
