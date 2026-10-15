@@ -31,7 +31,7 @@ export default async function handler(req, res) {
 }
 
 // ============================================
-// AUDIO SEARCH — Toolbox + Web Hybrid (TRUE Universal)
+// AUDIO SEARCH — Universal Multi-Query
 // ============================================
 async function searchAudio(query, res) {
     const allResults = [];
@@ -104,47 +104,83 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
-    // LAYER 3: Universal Web Search via Tavily (this is the "whole web" part)
+    // LAYER 3: Universal Web Search via Tavily (multi-query)
     async function searchWebAudio(keyword) {
         if (!tavilyKey || tavilyKey.length < 10) return;
-        try {
-            const resp = await fetch('https://api.tavily.com/search', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + tavilyKey
-                },
-                body: JSON.stringify({
-                    query: keyword + " roblox audio ID library",
-                    search_depth: "advanced",
-                    max_results: 10
-                })
-            });
-            if (!resp.ok) return;
-            const data = await resp.json();
-            if (!Array.isArray(data.results)) return;
-            for (const r of data.results) {
-                const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
-                const matches = combined.match(/roblox\.com\/library\/(\d{6,})/g) || [];
-                for (const m of matches) {
-                    const idMatch = m.match(/(\d{6,})/);
-                    if (idMatch) {
-                        const pid = idMatch[1];
-                        if (seenIds.has(pid)) continue;
-                        seenIds.add(pid);
-                        allResults.push({
-                            id: pid,
-                            name: (r.title || "Roblox Audio").replace(/\s*[|\-–].*$/, "").trim(),
-                            creator: "From web",
-                            duration: 0,
-                            isVerified: false,
-                            source: "web",
-                            url: "https://www.roblox.com/library/" + pid
-                        });
+
+        const queries = [
+            keyword + " roblox song ID list",
+            keyword + " roblox audio library ID",
+            keyword + " roblox music codes working",
+            keyword + " roblox song IDs 2024 2025",
+        ];
+
+        for (const q of queries) {
+            try {
+                const resp = await fetch('https://api.tavily.com/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + tavilyKey
+                    },
+                    body: JSON.stringify({
+                        query: q,
+                        search_depth: "advanced",
+                        max_results: 10
+                    })
+                });
+                if (!resp.ok) continue;
+                const data = await resp.json();
+                if (!Array.isArray(data.results)) continue;
+
+                for (const r of data.results) {
+                    const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
+
+                    // Extract roblox.com/library/ID
+                    const libraryMatches = combined.match(/roblox\.com\/library\/(\d{6,})/g) || [];
+                    for (const m of libraryMatches) {
+                        const idMatch = m.match(/(\d{6,})/);
+                        if (idMatch) {
+                            const pid = idMatch[1];
+                            if (seenIds.has(pid)) continue;
+                            seenIds.add(pid);
+                            allResults.push({
+                                id: pid,
+                                name: (r.title || "Roblox Audio").replace(/\s*[|\-–].*$/, "").trim(),
+                                creator: "From web",
+                                duration: 0,
+                                isVerified: false,
+                                source: "web",
+                                url: "https://www.roblox.com/library/" + pid
+                            });
+                        }
+                    }
+
+                    // Extract "ID: 12345678" patterns
+                    const idPatterns = combined.match(/(?:id|ID|code|Code)[:\s]+(\d{6,15})/g) || [];
+                    for (const match of idPatterns) {
+                        const numMatch = match.match(/(\d{6,15})/);
+                        if (numMatch) {
+                            const pid = numMatch[1];
+                            const num = parseInt(pid);
+                            if (num > 100000 && num < 999999999999999 && !seenIds.has(pid)) {
+                                seenIds.add(pid);
+                                allResults.push({
+                                    id: pid,
+                                    name: (r.title || "Audio ID").replace(/\s*[|\-–].*$/, "").trim(),
+                                    creator: "From web",
+                                    duration: 0,
+                                    isVerified: false,
+                                    source: "web",
+                                    url: "https://www.roblox.com/library/" + pid
+                                });
+                            }
+                        }
                     }
                 }
-            }
-        } catch (e) { /* continue */ }
+            } catch (e) { /* continue */ }
+            if (allResults.length >= 20) break;
+        }
     }
 
     // Run all layers
@@ -156,18 +192,23 @@ async function searchAudio(query, res) {
     const lower = query.toLowerCase();
     const relatedTerms = {
         "opm": ["opm", "filipino", "tagalog", "pinoy"],
-        "filipino": ["filipino", "opm", "tagalog", "pinoy"],
-        "tagalog": ["tagalog", "filipino", "opm", "pinoy"],
-        "pinoy": ["pinoy", "opm", "filipino"],
+        "filipino": ["filipino", "opm", "tagalog"],
+        "tagalog": ["tagalog", "filipino", "opm"],
+        "pinoy": ["pinoy", "opm"],
         "kpop": ["kpop", "korean"],
         "anime": ["anime", "japanese", "jpop"],
         "lofi": ["lofi", "chill", "study"],
-        "phonk": ["phonk", "drift"],
-        "edm": ["edm", "electronic"],
-        "hiphop": ["hiphop", "rap"],
-        "rock": ["rock", "metal"],
-        "jazz": ["jazz"],
+        "phonk": ["phonk", "drift", "memphis"],
+        "edm": ["edm", "electronic", "house"],
+        "hiphop": ["hiphop", "rap", "trap"],
+        "rock": ["rock", "metal", "guitar"],
+        "pop": ["pop", "popular"],
+        "jazz": ["jazz", "smooth"],
         "classical": ["classical", "piano"],
+        "rnb": ["rnb", "soul"],
+        "country": ["country", "western"],
+        "reggae": ["reggae", "ska"],
+        "latin": ["latin", "reggaeton"],
     };
 
     for (const [key, terms] of Object.entries(relatedTerms)) {
@@ -182,7 +223,7 @@ async function searchAudio(query, res) {
         }
     }
 
-    // Sort: verified first, shorter duration
+    // Sort: verified first, then by duration
     allResults.sort((a, b) => {
         if (a.isVerified !== b.isVerified) return b.isVerified - a.isVerified;
         return (a.duration || 0) - (b.duration || 0);
