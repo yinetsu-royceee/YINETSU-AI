@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback (Oct 2026 Update)
-// TEMP TEST: Groq + Gemini disabled → force OpenRouter
+// YINETSU AI — Multi-Provider Fallback (Oct 2026 FINAL)
+// Order: Groq (4 models) → Gemini → OpenRouter
+// Total daily budget: ~4,500+ requests/day
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -15,14 +16,14 @@ const GROQ_MODELS = [
     'openai/gpt-oss-120b',
 ];
 
-// Gemini fallback models (updated for Oct 2026 free tier)
+// Gemini fallback models
 const GEMINI_MODELS = [
     'gemini-3.5-flash-lite',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
 ];
 
-// OpenRouter fallback models (updated from Oct 2026 free catalog)
+// OpenRouter fallback models
 const OPENROUTER_MODELS = [
     'google/gemma-4-31b:free',
     'nvidia/nemotron-3-super:free',
@@ -94,9 +95,9 @@ ACTION RULES:
     const debugLog = [];
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ — TEMPORARILY DISABLED FOR TESTING
+    // PROVIDER 1: GROQ (multi-model fallback)
     // ═══════════════════════════════════════════════════════════════
-    if (false && process.env.GROQ_API_KEY) {
+    if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
                 const response = await fetch(GROQ_ENDPOINT, {
@@ -145,13 +146,13 @@ ACTION RULES:
             }
         }
     } else {
-        debugLog.push('Groq: DISABLED FOR TEST');
+        debugLog.push('Groq: API key missing');
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GOOGLE GEMINI — TEMPORARILY DISABLED FOR TESTING
+    // PROVIDER 2: GOOGLE GEMINI
     // ═══════════════════════════════════════════════════════════════
-    if (false && process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
                 const geminiContents = [];
@@ -218,7 +219,7 @@ ACTION RULES:
             }
         }
     } else {
-        debugLog.push('Gemini: DISABLED FOR TEST');
+        debugLog.push('Gemini: API key missing');
     }
 
     // ═══════════════════════════════════════════════════════════════
