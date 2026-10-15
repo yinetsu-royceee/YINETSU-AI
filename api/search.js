@@ -31,13 +31,51 @@ export default async function handler(req, res) {
 }
 
 // ============================================
-// AUDIO SEARCH — Universal + Related Keywords
+// AUDIO SEARCH — Toolbox + Web Hybrid (TRUE Universal)
 // ============================================
 async function searchAudio(query, res) {
     const allResults = [];
     const seenIds = new Set();
+    const tavilyKey = process.env.TAVILY_API_KEY;
 
-    async function searchCatalog(keyword, source) {
+    // LAYER 1: Roblox Toolbox Service
+    async function searchToolbox(keyword) {
+        try {
+            const url = 'https://apis.roblox.com/toolbox-service/v1/marketplace/5?keyword=' + encodeURIComponent(keyword) + '&limit=30';
+            const response = await fetch(url, {
+                headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+            });
+            if (!response.ok) return;
+            const text = await response.text();
+            let data;
+            try { data = JSON.parse(text); } catch (e) {
+                const match = text.match(/\{[\s\S]*\}/);
+                if (match) data = JSON.parse(match[0]); else return;
+            }
+            let items = data.data || data.creatorStoreAssets || data.results || (Array.isArray(data) ? data : []);
+            for (const item of items) {
+                const asset = item.asset || item;
+                if (!asset || !asset.id) continue;
+                const assetType = asset.assetType || asset.type;
+                if (assetType && assetType !== 3 && assetType !== "Audio") continue;
+                const pid = String(asset.id);
+                if (seenIds.has(pid)) continue;
+                seenIds.add(pid);
+                allResults.push({
+                    id: pid,
+                    name: asset.name || "Untitled",
+                    creator: (asset.creator && asset.creator.name) || asset.creatorName || "Unknown",
+                    duration: asset.duration || 0,
+                    isVerified: false,
+                    source: "toolbox",
+                    url: "https://www.roblox.com/library/" + pid
+                });
+            }
+        } catch (e) { /* continue */ }
+    }
+
+    // LAYER 2: Legacy Catalog API
+    async function searchCatalog(keyword) {
         try {
             const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(keyword) + '&Limit=30&SortType=Relevance';
             const response = await fetch(url, {
@@ -48,10 +86,8 @@ async function searchAudio(query, res) {
             if (!Array.isArray(data.data)) return;
             for (const item of data.data) {
                 if (!item || !item.id) continue;
-                const isPublic = item.isPublic !== false;
-                const hasDuration = (item.duration || 0) > 0;
-                if (!isPublic || !hasDuration) continue;
-                if (item.duration > 900) continue;
+                if (item.isPublic === false) continue;
+                if ((item.duration || 0) === 0) continue;
                 const pid = String(item.id);
                 if (seenIds.has(pid)) continue;
                 seenIds.add(pid);
@@ -61,15 +97,60 @@ async function searchAudio(query, res) {
                     creator: item.creatorName || "Unknown",
                     duration: item.duration || 0,
                     isVerified: item.isVerified || false,
-                    source: source,
+                    source: "catalog",
                     url: "https://www.roblox.com/library/" + pid
                 });
             }
         } catch (e) { /* continue */ }
     }
 
-    // Primary search
-    await searchCatalog(query, "catalog");
+    // LAYER 3: Universal Web Search via Tavily (this is the "whole web" part)
+    async function searchWebAudio(keyword) {
+        if (!tavilyKey || tavilyKey.length < 10) return;
+        try {
+            const resp = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + tavilyKey
+                },
+                body: JSON.stringify({
+                    query: keyword + " roblox audio ID library",
+                    search_depth: "advanced",
+                    max_results: 10
+                })
+            });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!Array.isArray(data.results)) return;
+            for (const r of data.results) {
+                const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
+                const matches = combined.match(/roblox\.com\/library\/(\d{6,})/g) || [];
+                for (const m of matches) {
+                    const idMatch = m.match(/(\d{6,})/);
+                    if (idMatch) {
+                        const pid = idMatch[1];
+                        if (seenIds.has(pid)) continue;
+                        seenIds.add(pid);
+                        allResults.push({
+                            id: pid,
+                            name: (r.title || "Roblox Audio").replace(/\s*[|\-–].*$/, "").trim(),
+                            creator: "From web",
+                            duration: 0,
+                            isVerified: false,
+                            source: "web",
+                            url: "https://www.roblox.com/library/" + pid
+                        });
+                    }
+                }
+            }
+        } catch (e) { /* continue */ }
+    }
+
+    // Run all layers
+    await searchToolbox(query);
+    if (allResults.length < 5) await searchCatalog(query);
+    if (allResults.length < 5) await searchWebAudio(query);
 
     // Related keywords (universal language support)
     const lower = query.toLowerCase();
@@ -77,42 +158,31 @@ async function searchAudio(query, res) {
         "opm": ["opm", "filipino", "tagalog", "pinoy"],
         "filipino": ["filipino", "opm", "tagalog", "pinoy"],
         "tagalog": ["tagalog", "filipino", "opm", "pinoy"],
-        "pinoy": ["pinoy", "opm", "filipino", "tagalog"],
-        "kpop": ["kpop", "korean", "kdrama"],
+        "pinoy": ["pinoy", "opm", "filipino"],
+        "kpop": ["kpop", "korean"],
         "anime": ["anime", "japanese", "jpop"],
         "lofi": ["lofi", "chill", "study"],
-        "phonk": ["phonk", "drift", "memphis"],
-        "edm": ["edm", "electronic", "house"],
-        "hiphop": ["hiphop", "rap", "trap"],
-        "rock": ["rock", "metal", "guitar"],
-        "pop": ["pop", "popular"],
-        "jazz": ["jazz", "smooth"],
-        "classical": ["classical", "piano", "orchestra"],
-        "rnb": ["rnb", "soul"],
-        "country": ["country", "western"],
-        "reggae": ["reggae", "ska"],
-        "latin": ["latin", "reggaeton"],
-        "indie": ["indie", "alternative"],
+        "phonk": ["phonk", "drift"],
+        "edm": ["edm", "electronic"],
+        "hiphop": ["hiphop", "rap"],
+        "rock": ["rock", "metal"],
+        "jazz": ["jazz"],
+        "classical": ["classical", "piano"],
     };
 
     for (const [key, terms] of Object.entries(relatedTerms)) {
         if (lower.includes(key)) {
-            for (const term of terms) {
-                if (term !== lower && !seenIds.has("q_" + term)) {
+            for (const term of terms.slice(1, 3)) {
+                if (!seenIds.has("q_" + term)) {
                     seenIds.add("q_" + term);
-                    await searchCatalog(term, "related");
+                    await searchToolbox(term);
+                    await searchWebAudio(term);
                 }
             }
         }
     }
 
-    // Generic fallback
-    if (allResults.length < 5) {
-        await searchCatalog(query + " roblox", "fallback");
-        await searchCatalog("roblox audio " + query, "fallback");
-    }
-
-    // Sort: verified first, then shorter duration
+    // Sort: verified first, shorter duration
     allResults.sort((a, b) => {
         if (a.isVerified !== b.isVerified) return b.isVerified - a.isVerified;
         return (a.duration || 0) - (b.duration || 0);
@@ -121,19 +191,18 @@ async function searchAudio(query, res) {
     return res.status(200).json({
         query: query, type: "audio",
         count: allResults.length,
-        results: allResults.slice(0, 15)
+        results: allResults.slice(0, 20)
     });
 }
 
 // ============================================
-// GAME SEARCH — Universal + Live Player Count + Creator
+// GAME SEARCH — Universal + Player Count
 // ============================================
 async function searchGame(query, res) {
     const rawResults = [];
     const seenIds = new Set();
     const lowerQuery = query.toLowerCase().trim();
 
-    // 1. Get Place IDs via Tavily
     const tavilyKey = process.env.TAVILY_API_KEY;
     try {
         if (tavilyKey && tavilyKey.length > 10) {
@@ -158,11 +227,9 @@ async function searchGame(query, res) {
                                 if (!seenIds.has(pid)) {
                                     seenIds.add(pid);
                                     rawResults.push({
-                                        id: pid,
-                                        placeId: pid,
+                                        id: pid, placeId: pid,
                                         name: (r.title || "Roblox Game").replace(/\s*[|\-–].*$/, "").trim(),
-                                        creator: "Roblox User",
-                                        playing: 0,
+                                        creator: "Roblox User", playing: 0,
                                         url: "https://www.roblox.com/games/" + pid,
                                         snippet: (r.content || "").slice(0, 120)
                                     });
@@ -175,26 +242,20 @@ async function searchGame(query, res) {
         }
     } catch (e) { /* ignore */ }
 
-    // Include official Blox Fruits
     if (lowerQuery.includes("blox fruit") && !seenIds.has("2753915549")) {
         seenIds.add("2753915549");
         rawResults.unshift({
-            id: "2753915549",
-            placeId: "2753915549",
-            name: "Blox Fruits",
-            creator: "Gamer Robot Inc",
-            playing: 0,
+            id: "2753915549", placeId: "2753915549",
+            name: "Blox Fruits", creator: "Gamer Robot Inc", playing: 0,
             url: "https://www.roblox.com/games/2753915549",
             snippet: "Welcome to Blox Fruits!"
         });
     }
 
-    // 2. Fetch Live Player Count via Universe Resolution
     if (rawResults.length > 0) {
         try {
             const targetGames = rawResults.slice(0, 10);
             const universeMap = {};
-
             await Promise.all(targetGames.map(async (g) => {
                 try {
                     const uResp = await fetch(`https://apis.roblox.com/universes/v1/places/${g.placeId}/universe`, {
@@ -202,9 +263,7 @@ async function searchGame(query, res) {
                     });
                     if (uResp.ok) {
                         const uData = await uResp.json();
-                        if (uData && uData.universeId) {
-                            universeMap[g.placeId] = String(uData.universeId);
-                        }
+                        if (uData && uData.universeId) universeMap[g.placeId] = String(uData.universeId);
                     }
                 } catch (e) { /* ignore */ }
             }));
@@ -226,7 +285,6 @@ async function searchGame(query, res) {
                                 creator: item.creator ? item.creator.name : "Unknown"
                             };
                         }
-
                         for (const game of rawResults) {
                             const uId = universeMap[game.placeId];
                             if (uId && infoMap[uId]) {
@@ -242,7 +300,6 @@ async function searchGame(query, res) {
         } catch (e) { /* ignore */ }
     }
 
-    // 3. Smart Sort: Exact match first, then by live player count
     rawResults.sort((a, b) => {
         const aExact = a.name.toLowerCase() === lowerQuery ? 1 : 0;
         const bExact = b.name.toLowerCase() === lowerQuery ? 1 : 0;
@@ -257,9 +314,6 @@ async function searchGame(query, res) {
     });
 }
 
-// ============================================
-// USER SEARCH
-// ============================================
 async function searchUser(query, res) {
     try {
         const url = 'https://users.roblox.com/v1/users/search?keyword=' + encodeURIComponent(query) + '&limit=10';
@@ -287,9 +341,6 @@ async function searchUser(query, res) {
     }
 }
 
-// ============================================
-// SCRIPT SEARCH
-// ============================================
 async function searchScript(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     let searchResults = [];
@@ -340,9 +391,7 @@ async function searchScript(query, res) {
                 if (!seenCodes.has(code)) {
                     seenCodes.add(code);
                     extractedScripts.push({
-                        code: code,
-                        source: result.url,
-                        sourceTitle: result.title,
+                        code: code, source: result.url, sourceTitle: result.title,
                         safety: analyzeScriptSafety(code)
                     });
                 }
@@ -352,11 +401,9 @@ async function searchScript(query, res) {
     }
 
     return res.status(200).json({
-        query: query,
-        type: "script",
+        query: query, type: "script",
         searchResults: searchResults.slice(0, 5).map(r => ({
-            title: r.title, url: r.url,
-            snippet: (r.snippet || "").slice(0, 200)
+            title: r.title, url: r.url, snippet: (r.snippet || "").slice(0, 200)
         })),
         extractedCount: extractedScripts.length,
         scripts: extractedScripts.slice(0, 12)
@@ -366,12 +413,10 @@ async function searchScript(query, res) {
 function extractLoadstrings(text) {
     const scripts = [];
     if (!text || typeof text !== 'string') return scripts;
-
     const patterns = [
         /loadstring\s*\(\s*game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s]{20,}?)["']\s*\)\s*\)/g,
         /game\s*:\s*HttpGet(?:Async)?\s*\(\s*["']([^"'\s]{20,}?)["']\s*\)/g
     ];
-
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(text)) !== null) {
@@ -391,7 +436,6 @@ function analyzeScriptSafety(code) {
     const lower = code.toLowerCase();
     const flags = [];
     let score = 0;
-
     if (lower.includes('roblosecurity')) { flags.push("🚨 Cookie stealer"); score -= 5; }
     if (lower.includes('discord.com/api/webhooks')) { flags.push("🚨 Discord webhook"); score -= 4; }
     if (lower.includes('syn.request') || lower.includes('http_request')) { flags.push("⚠️ External requests"); score -= 1; }
@@ -400,7 +444,6 @@ function analyzeScriptSafety(code) {
         flags.push("✅ Known script host"); score += 2;
     }
     if (lower.includes('roblox.com')) { flags.push("✅ Roblox domain"); score += 1; }
-
     let level = "CAUTION";
     if (score >= 3) level = "SAFE";
     else if (score >= 1) level = "LIKELY_SAFE";
@@ -409,9 +452,6 @@ function analyzeScriptSafety(code) {
     return { level, score, flags };
 }
 
-// ============================================
-// WEB SEARCH
-// ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey && tavilyKey.length > 10) {
