@@ -1,18 +1,15 @@
 // ═══════════════════════════════════════════════════════════════
 // YINETSU AI — Multi-Provider Fallback (Oct 2026)
-// TEST BUILD: openai/gpt-oss-120b COMMENTED OUT
+// TEST BUILD: Only llama-3.1-8b-instant for Groq
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Groq model chain — gpt-oss-120b commented out for testing
+// Groq model chain — ONLY llama-3.1-8b-instant for this test
 const GROQ_MODELS = [
     'llama-3.1-8b-instant',
-    'llama-3.3-70b-versatile',
-    'gemma2-9b-it',
-    // 'openai/gpt-oss-120b',   ← COMMENTED OUT FOR TEST
 ];
 
 const GEMINI_MODELS = [
