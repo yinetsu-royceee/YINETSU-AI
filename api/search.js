@@ -1,19 +1,20 @@
 // ═══════════════════════════════════════════════════════════════
 // YINETSU SEARCH — Optimized (Oct 2026)
-// Features: Caching · Timeout · Error Handling · Smart Sources
+// Features: 3-Week Caching · Timeout · Error Handling · Smart Sources
 // ═══════════════════════════════════════════════════════════════
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const TAVILY_TIMEOUT_MS = 8000;
 
-// ═══ CACHING (in-memory, per search type TTL) ═══
+// ═══ CACHING (3 weeks TTL for ALL types) ═══
 const SEARCH_CACHE = new Map();
+const CACHE_TTL_MS = 3 * 7 * 24 * 60 * 60 * 1000; // 21 days
 const CACHE_TTL = {
-    audio:  60 * 60 * 1000,   // 1 hour
-    game:   30 * 60 * 1000,   // 30 min
-    user:   15 * 60 * 1000,   // 15 min
-    web:    15 * 60 * 1000,   // 15 min
-    script: 60 * 60 * 1000,   // 1 hour
+    audio:  CACHE_TTL_MS,
+    game:   CACHE_TTL_MS,
+    user:   CACHE_TTL_MS,
+    web:    CACHE_TTL_MS,
+    script: CACHE_TTL_MS,
 };
 
 function makeSearchKey(type, query) {
@@ -23,8 +24,7 @@ function makeSearchKey(type, query) {
 function getCachedSearch(key, type) {
     const entry = SEARCH_CACHE.get(key);
     if (!entry) return null;
-    const ttl = CACHE_TTL[type] || 5 * 60 * 1000;
-    if (Date.now() - entry.time > ttl) {
+    if (Date.now() - entry.time > CACHE_TTL_MS) {
         SEARCH_CACHE.delete(key);
         return null;
     }
@@ -33,12 +33,11 @@ function getCachedSearch(key, type) {
 
 function setCachedSearch(key, data) {
     SEARCH_CACHE.set(key, { data, time: Date.now() });
-    if (SEARCH_CACHE.size > 200) {
+    // Cleanup: max 2000 entries, remove expired
+    if (SEARCH_CACHE.size > 2000) {
         const now = Date.now();
         for (const [k, v] of SEARCH_CACHE.entries()) {
-            const type = k.split('::')[0];
-            const ttl = CACHE_TTL[type] || 5 * 60 * 1000;
-            if (now - v.time > ttl) SEARCH_CACHE.delete(k);
+            if (now - v.time > CACHE_TTL_MS) SEARCH_CACHE.delete(k);
         }
     }
 }
@@ -92,7 +91,6 @@ export default async function handler(req, res) {
         else if (type === "script") result = await searchScript(query);
         else result = await searchWeb(query);
 
-        // Cache the result
         if (result) setCachedSearch(cacheKey, result);
 
         return res.status(200).json(result);
@@ -178,7 +176,7 @@ async function searchAudio(query) {
         } catch (e) { /* continue */ }
     }
 
-    // ── SOURCE 3: Web (TAVILY — only 1 query, not 3!) ──
+    // ── SOURCE 3: Web (TAVILY — only 1 query) ──
     async function searchWebAudio(keyword) {
         if (!tavilyKey || tavilyKey.length < 10) return;
 
@@ -248,7 +246,7 @@ async function searchAudio(query) {
     // ── SMART SOURCE ORDERING ──
     await searchToolbox(query);
     if (allResults.length < 5) await searchCatalog(query);
-    if (allResults.length < 5) await searchWebAudio(query);  // Only call Tavily if needed
+    if (allResults.length < 5) await searchWebAudio(query);
 
     // ── RELATED TERMS (only if needed) ──
     const lower = query.toLowerCase();
@@ -263,7 +261,7 @@ async function searchAudio(query) {
 
     for (const [key, terms] of Object.entries(relatedTerms)) {
         if (lower.includes(key)) {
-            for (const term of terms.slice(1, 2)) {  // Only 1 related term (not 3)
+            for (const term of terms.slice(1, 2)) {
                 if (!seenIds.has("q_" + term)) {
                     seenIds.add("q_" + term);
                     await searchToolbox(term);
@@ -281,7 +279,7 @@ async function searchAudio(query) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GAME SEARCH — Same as before but with timeout
+// GAME SEARCH
 // ═══════════════════════════════════════════════════════════════
 async function searchGame(query) {
     const rawResults = [];
@@ -337,7 +335,6 @@ async function searchGame(query) {
         });
     }
 
-    // Enrich with player counts
     if (rawResults.length > 0) {
         try {
             const targetGames = rawResults.slice(0, 10);
@@ -401,7 +398,7 @@ async function searchGame(query) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// USER SEARCH (FREE — Roblox API lang)
+// USER SEARCH (FREE)
 // ═══════════════════════════════════════════════════════════════
 async function searchUser(query) {
     try {
@@ -431,7 +428,7 @@ async function searchUser(query) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SCRIPT SEARCH — uses Tavily
+// SCRIPT SEARCH
 // ═══════════════════════════════════════════════════════════════
 async function searchScript(query) {
     const tavilyKey = process.env.TAVILY_API_KEY;
@@ -544,7 +541,7 @@ function analyzeScriptSafety(code) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// WEB SEARCH — Tavily + Wikipedia fallback
+// WEB SEARCH
 // ═══════════════════════════════════════════════════════════════
 async function searchWeb(query) {
     const tavilyKey = process.env.TAVILY_API_KEY;
