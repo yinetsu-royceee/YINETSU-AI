@@ -30,46 +30,110 @@ export default async function handler(req, res) {
     }
 }
 
+// ============================================
+// AUDIO SEARCH — Universal + Related Keywords
+// ============================================
 async function searchAudio(query, res) {
-    try {
-        const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(query) + '&Limit=30&SortType=Relevance';
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
-        });
-        if (!response.ok) {
-            return res.status(200).json({ query: query, type: "audio", count: 0, results: [], note: "Roblox " + response.status });
-        }
-        const data = await response.json();
-        const results = [];
-        if (Array.isArray(data.data)) {
-            for (let i = 0; i < data.data.length; i++) {
-                const item = data.data[i];
-                if (item && item.id) {
-                    results.push({
-                        id: String(item.id),
-                        name: item.name || "Untitled",
-                        creator: item.creatorName || "Unknown",
-                        duration: item.duration || 0,
-                        url: "https://www.roblox.com/library/" + item.id
-                    });
+    const allResults = [];
+    const seenIds = new Set();
+
+    async function searchCatalog(keyword, source) {
+        try {
+            const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(keyword) + '&Limit=30&SortType=Relevance';
+            const response = await fetch(url, {
+                headers: { 'User-Agent': 'Roblox/WinInet', 'Accept': 'application/json' }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            if (!Array.isArray(data.data)) return;
+            for (const item of data.data) {
+                if (!item || !item.id) continue;
+                const isPublic = item.isPublic !== false;
+                const hasDuration = (item.duration || 0) > 0;
+                if (!isPublic || !hasDuration) continue;
+                if (item.duration > 900) continue;
+                const pid = String(item.id);
+                if (seenIds.has(pid)) continue;
+                seenIds.add(pid);
+                allResults.push({
+                    id: pid,
+                    name: item.name || "Untitled",
+                    creator: item.creatorName || "Unknown",
+                    duration: item.duration || 0,
+                    isVerified: item.isVerified || false,
+                    source: source,
+                    url: "https://www.roblox.com/library/" + pid
+                });
+            }
+        } catch (e) { /* continue */ }
+    }
+
+    // Primary search
+    await searchCatalog(query, "catalog");
+
+    // Related keywords (universal language support)
+    const lower = query.toLowerCase();
+    const relatedTerms = {
+        "opm": ["opm", "filipino", "tagalog", "pinoy"],
+        "filipino": ["filipino", "opm", "tagalog", "pinoy"],
+        "tagalog": ["tagalog", "filipino", "opm", "pinoy"],
+        "pinoy": ["pinoy", "opm", "filipino", "tagalog"],
+        "kpop": ["kpop", "korean", "kdrama"],
+        "anime": ["anime", "japanese", "jpop"],
+        "lofi": ["lofi", "chill", "study"],
+        "phonk": ["phonk", "drift", "memphis"],
+        "edm": ["edm", "electronic", "house"],
+        "hiphop": ["hiphop", "rap", "trap"],
+        "rock": ["rock", "metal", "guitar"],
+        "pop": ["pop", "popular"],
+        "jazz": ["jazz", "smooth"],
+        "classical": ["classical", "piano", "orchestra"],
+        "rnb": ["rnb", "soul"],
+        "country": ["country", "western"],
+        "reggae": ["reggae", "ska"],
+        "latin": ["latin", "reggaeton"],
+        "indie": ["indie", "alternative"],
+    };
+
+    for (const [key, terms] of Object.entries(relatedTerms)) {
+        if (lower.includes(key)) {
+            for (const term of terms) {
+                if (term !== lower && !seenIds.has("q_" + term)) {
+                    seenIds.add("q_" + term);
+                    await searchCatalog(term, "related");
                 }
             }
         }
-        return res.status(200).json({ query: query, type: "audio", count: results.length, results: results.slice(0, 12) });
-    } catch (err) {
-        return res.status(200).json({ query: query, type: "audio", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
+
+    // Generic fallback
+    if (allResults.length < 5) {
+        await searchCatalog(query + " roblox", "fallback");
+        await searchCatalog("roblox audio " + query, "fallback");
+    }
+
+    // Sort: verified first, then shorter duration
+    allResults.sort((a, b) => {
+        if (a.isVerified !== b.isVerified) return b.isVerified - a.isVerified;
+        return (a.duration || 0) - (b.duration || 0);
+    });
+
+    return res.status(200).json({
+        query: query, type: "audio",
+        count: allResults.length,
+        results: allResults.slice(0, 15)
+    });
 }
 
 // ============================================
-// GAME SEARCH — ACCURATE LIVE PLAYER COUNT & CREATOR FIX
+// GAME SEARCH — Universal + Live Player Count + Creator
 // ============================================
 async function searchGame(query, res) {
     const rawResults = [];
     const seenIds = new Set();
     const lowerQuery = query.toLowerCase().trim();
 
-    // 1. Kunin ang Place IDs gamit ang Tavily Web Search
+    // 1. Get Place IDs via Tavily
     const tavilyKey = process.env.TAVILY_API_KEY;
     try {
         if (tavilyKey && tavilyKey.length > 10) {
@@ -111,7 +175,7 @@ async function searchGame(query, res) {
         }
     } catch (e) { /* ignore */ }
 
-    // Siguraduhing kasama ang Official Place ID ng Blox Fruits
+    // Include official Blox Fruits
     if (lowerQuery.includes("blox fruit") && !seenIds.has("2753915549")) {
         seenIds.add("2753915549");
         rawResults.unshift({
@@ -125,12 +189,11 @@ async function searchGame(query, res) {
         });
     }
 
-    // 2. Fetch Live Player Count & Game Info gamit ang Universe Resolution
+    // 2. Fetch Live Player Count via Universe Resolution
     if (rawResults.length > 0) {
         try {
-            // Kunin ang Universe IDs para sa bawat Place ID (batch process max 10)
             const targetGames = rawResults.slice(0, 10);
-            const universeMap = {}; // placeId -> universeId
+            const universeMap = {};
 
             await Promise.all(targetGames.map(async (g) => {
                 try {
@@ -179,7 +242,7 @@ async function searchGame(query, res) {
         } catch (e) { /* ignore */ }
     }
 
-    // 3. Smart Sorting Logic: Exact match sa taas, at ayon sa Live Player Count
+    // 3. Smart Sort: Exact match first, then by live player count
     rawResults.sort((a, b) => {
         const aExact = a.name.toLowerCase() === lowerQuery ? 1 : 0;
         const bExact = b.name.toLowerCase() === lowerQuery ? 1 : 0;
@@ -346,6 +409,9 @@ function analyzeScriptSafety(code) {
     return { level, score, flags };
 }
 
+// ============================================
+// WEB SEARCH
+// ============================================
 async function searchWeb(query, res) {
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey && tavilyKey.length > 10) {
