@@ -149,9 +149,8 @@ ACTION RULES:
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GOOGLE GEMINI
-    // ═══════════════════════════════════════════════════════════════
-    if (false && process.env.GEMINI_API_KEY) {
+// ═══ PROVIDER 2: GOOGLE GEMINI (TEMPORARILY DISABLED) ═══
+if (false && process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
                 // Convert messages to Gemini format
