@@ -95,7 +95,7 @@ ACTION RULES:
     // ═══════════════════════════════════════════════════════════════
     // PROVIDER 1: GROQ (multi-model fallback)
     // ═══════════════════════════════════════════════════════════════
-    if (process.env.GROQ_API_KEY) {
+    if (false&&process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
                 const response = await fetch(GROQ_ENDPOINT, {
