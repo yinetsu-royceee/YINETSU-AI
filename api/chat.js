@@ -1,7 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback
+// YINETSU AI — Multi-Provider Fallback (Oct 2026 Update)
 // Order: Groq (4 models) → Gemini → OpenRouter
-// Total daily budget: ~2.8M tokens/day
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -16,17 +15,19 @@ const GROQ_MODELS = [
     'openai/gpt-oss-120b',
 ];
 
-// Gemini fallback models
+// Gemini fallback models (updated for Oct 2026 free tier)
 const GEMINI_MODELS = [
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
 ];
 
-// OpenRouter fallback models
+// OpenRouter fallback models (updated — Oct 2026 free catalog)
 const OPENROUTER_MODELS = [
-    'meta-llama/llama-3.1-8b-instruct:free',
-    'google/gemma-2-9b-it:free',
-    'mistralai/mistral-7b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'nvidia/nemotron-3-nano-30b-a3b:free',
+    'openai/gpt-oss-120b:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
 ];
 
 export default async function handler(req, res) {
@@ -95,7 +96,7 @@ ACTION RULES:
     // ═══════════════════════════════════════════════════════════════
     // PROVIDER 1: GROQ (multi-model fallback)
     // ═══════════════════════════════════════════════════════════════
-    if (false&&process.env.GROQ_API_KEY) {
+    if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
                 const response = await fetch(GROQ_ENDPOINT, {
