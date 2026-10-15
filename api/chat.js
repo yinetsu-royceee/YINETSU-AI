@@ -897,7 +897,8 @@ export default async function handler(req, res) {
     const prefs = detectPreferences(message);
     updateUserMemory(clientIp, { ...prefs, messageCount });
 
-    const baseSystem = customSystem || `You are Yinetsu AI, assistant for the Yinetsu Remote Spy Roblox script.
+    // ═══ FORCE SAVAGE SYSTEM (ignore customSystem from Lua) ═══
+const baseSystem = `You are Yinetsu AI, assistant for the Yinetsu Remote Spy Roblox script.
 
 CRITICAL BEHAVIOR:
 1. Detect user language and reply in the exact same language.
