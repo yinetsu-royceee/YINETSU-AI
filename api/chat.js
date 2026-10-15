@@ -1,17 +1,32 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Model Fallback (Groq)
-// Auto-switches model if rate limit hit on one
+// YINETSU AI — Multi-Provider Fallback
+// Order: Groq (4 models) → Gemini → OpenRouter
+// Total daily budget: ~2.8M tokens/day
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Fallback chain — try in order
-// Total daily budget: ~1.3M tokens/day (vs 200K with single model)
-const MODEL_CHAIN = [
-    'llama-3.1-8b-instant',       // 500K tokens/day — fastest, primary
-    'llama-3.3-70b-versatile',    // 100K tokens/day — smart fallback
-    'gemma2-9b-it',               // 500K tokens/day — Google fallback
-    'openai/gpt-oss-120b',        // 200K tokens/day — last resort (original)
+// Groq model chain (4 models — auto-switch if one fails)
+const GROQ_MODELS = [
+    'llama-3.1-8b-instant',
+    'llama-3.3-70b-versatile',
+    'gemma2-9b-it',
+    'openai/gpt-oss-120b',
+];
+
+// Gemini fallback models
+const GEMINI_MODELS = [
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+];
+
+// OpenRouter fallback models
+const OPENROUTER_MODELS = [
+    'meta-llama/llama-3.1-8b-instruct:free',
+    'google/gemma-2-9b-it:free',
+    'mistralai/mistral-7b-instruct:free',
 ];
 
 export default async function handler(req, res) {
@@ -54,106 +69,223 @@ ACTION RULES:
         ? customSystem + "\n\n⚠️ IMPORTANT: You have CONVERSATION MEMORY. If user gives short replies, treat them as answers to your previous questions. Continue naturally."
         : defaultSystem;
 
-    const messages = [{ role: 'system', content: systemPrompt }];
-
+    // Parse history
+    let history = [];
     if (historyRaw) {
         try {
-            const history = typeof historyRaw === 'string' ? JSON.parse(historyRaw) : historyRaw;
-            if (Array.isArray(history)) {
-                for (const item of history) {
-                    if (item && item.role && item.content) {
-                        messages.push({
-                            role: item.role === 'user' ? 'user' : 'assistant',
-                            content: String(item.content)
-                        });
-                    }
-                }
-            }
+            const parsed = typeof historyRaw === 'string' ? JSON.parse(historyRaw) : historyRaw;
+            if (Array.isArray(parsed)) history = parsed;
         } catch (e) { /* ignore */ }
     }
 
-    messages.push({ role: 'user', content: message });
-
-    // ═══ TRY EACH MODEL IN CHAIN ═══
-    let lastError = null;
-    let lastErrorStatus = 500;
-    let lastErrMsg = 'Unknown error';
-
-    for (let i = 0; i < MODEL_CHAIN.length; i++) {
-        const model = MODEL_CHAIN[i];
-
-        try {
-            const response = await fetch(GROQ_ENDPOINT, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: messages,
-                    temperature: 0.6,
-                    max_tokens: 1024
-                })
+    // Build messages
+    const messages = [{ role: 'system', content: systemPrompt }];
+    for (const item of history) {
+        if (item && item.role && item.content) {
+            messages.push({
+                role: item.role === 'user' ? 'user' : 'assistant',
+                content: String(item.content)
             });
-
-            const data = await response.json();
-
-            // ═══ RATE LIMIT → try next model ═══
-            if (response.status === 429) {
-                lastErrorStatus = 429;
-                lastErrMsg = data?.error?.message || 'Rate limit';
-                console.log(`[Yinetsu] ${model} rate limited → trying next model`);
-                continue;
-            }
-
-            // ═══ OTHER API ERROR → try next model ═══
-            if (data.error) {
-                lastErrorStatus = response.status || 500;
-                lastErrMsg = data.error.message || 'API error';
-                console.log(`[Yinetsu] ${model} error: ${lastErrMsg.substring(0, 100)}`);
-                continue;
-            }
-
-            // ═══ SUCCESS ═══
-            const reply = data.choices?.[0]?.message?.content;
-            if (!reply) {
-                lastErrMsg = 'Empty response';
-                console.log(`[Yinetsu] ${model} returned empty response`);
-                continue;
-            }
-
-            console.log(`[Yinetsu] ✅ Reply via ${model} (${data.usage?.total_tokens || '?'} tokens)`);
-            return res.status(200).json({
-                reply: reply,
-                model: model,
-                usage: data.usage || null
-            });
-
-        } catch (err) {
-            lastError = err;
-            lastErrMsg = err?.message || String(err);
-            lastErrorStatus = 500;
-            console.log(`[Yinetsu] ${model} exception: ${lastErrMsg}`);
-            continue;
         }
     }
+    messages.push({ role: 'user', content: message });
 
-    // ═══ ALL MODELS EXHAUSTED ═══
-    console.log(`[Yinetsu] ❌ All models exhausted. Last error: ${lastErrMsg}`);
+    const debugLog = [];
 
-    // Friendly rate-limit message
-    if (lastErrorStatus === 429) {
-        return res.status(429).json({
-            reply: `⏰ All AI models are currently rate limited. Please try again in a few minutes.\n\nLast error: ${lastErrMsg.substring(0, 150)}`,
-            error: 'All models rate limited',
-            tried_models: MODEL_CHAIN
-        });
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 1: GROQ (multi-model fallback)
+    // ═══════════════════════════════════════════════════════════════
+    if (process.env.GROQ_API_KEY) {
+        for (const model of GROQ_MODELS) {
+            try {
+                const response = await fetch(GROQ_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: messages,
+                        temperature: 0.6,
+                        max_tokens: 1024
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.status === 429) {
+                    debugLog.push(`Groq/${model}: rate limited`);
+                    continue;
+                }
+
+                if (data.error) {
+                    debugLog.push(`Groq/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                    continue;
+                }
+
+                const reply = data.choices?.[0]?.message?.content;
+                if (!reply) {
+                    debugLog.push(`Groq/${model}: empty`);
+                    continue;
+                }
+
+                console.log(`[Yinetsu] ✅ Groq/${model}`);
+                return res.status(200).json({
+                    reply: reply,
+                    provider: 'groq',
+                    model: model,
+                    usage: data.usage || null
+                });
+
+            } catch (err) {
+                debugLog.push(`Groq/${model}: ${(err.message || '').substring(0, 60)}`);
+                continue;
+            }
+        }
+    } else {
+        debugLog.push('Groq: API key missing');
     }
 
-    return res.status(500).json({
-        reply: `⚠️ AI temporarily unavailable. Please try again.\n\nError: ${lastErrMsg.substring(0, 150)}`,
-        error: 'All models failed',
-        tried_models: MODEL_CHAIN
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 2: GOOGLE GEMINI
+    // ═══════════════════════════════════════════════════════════════
+    if (process.env.GEMINI_API_KEY) {
+        for (const model of GEMINI_MODELS) {
+            try {
+                // Convert messages to Gemini format
+                const geminiContents = [];
+                let systemInstruction = null;
+
+                for (const msg of messages) {
+                    if (msg.role === 'system') {
+                        systemInstruction = { parts: [{ text: msg.content }] };
+                    } else {
+                        geminiContents.push({
+                            role: msg.role === 'user' ? 'user' : 'model',
+                            parts: [{ text: msg.content }]
+                        });
+                    }
+                }
+
+                const geminiBody = {
+                    contents: geminiContents,
+                    generationConfig: {
+                        temperature: 0.6,
+                        maxOutputTokens: 1024
+                    }
+                };
+                if (systemInstruction) {
+                    geminiBody.systemInstruction = systemInstruction;
+                }
+
+                const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(geminiBody)
+                });
+
+                const data = await response.json();
+
+                if (response.status === 429) {
+                    debugLog.push(`Gemini/${model}: rate limited`);
+                    continue;
+                }
+
+                if (data.error) {
+                    debugLog.push(`Gemini/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                    continue;
+                }
+
+                const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!reply) {
+                    debugLog.push(`Gemini/${model}: empty`);
+                    continue;
+                }
+
+                console.log(`[Yinetsu] ✅ Gemini/${model}`);
+                return res.status(200).json({
+                    reply: reply,
+                    provider: 'gemini',
+                    model: model,
+                    usage: data.usageMetadata || null
+                });
+
+            } catch (err) {
+                debugLog.push(`Gemini/${model}: ${(err.message || '').substring(0, 60)}`);
+                continue;
+            }
+        }
+    } else {
+        debugLog.push('Gemini: API key missing');
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 3: OPENROUTER
+    // ═══════════════════════════════════════════════════════════════
+    if (process.env.OPENROUTER_API_KEY) {
+        for (const model of OPENROUTER_MODELS) {
+            try {
+                const response = await fetch(OPENROUTER_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
+                        'X-Title': 'Yinetsu AI'
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: messages,
+                        temperature: 0.6,
+                        max_tokens: 1024
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.status === 429) {
+                    debugLog.push(`OpenRouter/${model}: rate limited`);
+                    continue;
+                }
+
+                if (data.error) {
+                    debugLog.push(`OpenRouter/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                    continue;
+                }
+
+                const reply = data.choices?.[0]?.message?.content;
+                if (!reply) {
+                    debugLog.push(`OpenRouter/${model}: empty`);
+                    continue;
+                }
+
+                console.log(`[Yinetsu] ✅ OpenRouter/${model}`);
+                return res.status(200).json({
+                    reply: reply,
+                    provider: 'openrouter',
+                    model: model,
+                    usage: data.usage || null
+                });
+
+            } catch (err) {
+                debugLog.push(`OpenRouter/${model}: ${(err.message || '').substring(0, 60)}`);
+                continue;
+            }
+        }
+    } else {
+        debugLog.push('OpenRouter: API key missing');
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ALL PROVIDERS EXHAUSTED
+    // ═══════════════════════════════════════════════════════════════
+    console.log('[Yinetsu] ❌ All providers failed:', debugLog.join(' | '));
+
+    return res.status(503).json({
+        reply: `⏰ All AI providers are busy right now. Please try again in a few minutes.\n\nDebug: ${debugLog.slice(0, 5).join(' | ').substring(0, 200)}`,
+        error: 'All providers exhausted',
+        debug_log: debugLog
     });
 }
