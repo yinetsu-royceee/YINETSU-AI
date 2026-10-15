@@ -1,11 +1,9 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — HuggingFace ONLY TEST
-// All other providers disabled for testing
+// YINETSU AI — HuggingFace ONLY TEST (Router Endpoint)
 // ═══════════════════════════════════════════════════════════════
 
-const HF_ENDPOINT = 'https://api-inference.huggingface.co/models';
+const HF_ENDPOINT = 'https://router.huggingface.co/v1/chat/completions';
 
-// ═══ HUGGING FACE MODELS ═══
 const HF_MODELS = [
     'meta-llama/Llama-3.3-70B-Instruct',
     'Qwen/Qwen3.8-27B',
@@ -37,11 +35,6 @@ CRITICAL RULES:
 
 CONTEXT AWARENESS:
 - Continue the conversation naturally — remember what was discussed.
-- Example:
-  User: "hanap mo music"
-  AI: "Anong klaseng songs hanap mo?"
-  User: "filipino"
-  AI: [ACTION:search_music:filipino] "Sige, Filipino songs!"
 
 ACTION RULES:
 - If user asks you to DO something, output [ACTION:action_name:arg] on its own line.
@@ -60,37 +53,36 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
-    // Build a single prompt string (HF doesn't support chat format natively for all models)
-    let fullPrompt = systemPrompt + "\n\n";
+    const messages = [{ role: 'system', content: systemPrompt }];
     for (const item of history) {
         if (item && item.role && item.content) {
-            const role = item.role === 'user' ? 'User' : 'Assistant';
-            fullPrompt += role + ": " + item.content + "\n";
+            messages.push({
+                role: item.role === 'user' ? 'user' : 'assistant',
+                content: String(item.content)
+            });
         }
     }
-    fullPrompt += "User: " + message + "\nAssistant:";
+    messages.push({ role: 'user', content: message });
 
     const debugLog = [];
 
-    // ═══ HUGGING FACE ONLY ═══
+    // ═══ HUGGING FACE ROUTER ═══
     if (process.env.HUGGINGFACE_API_KEY) {
         for (const model of HF_MODELS) {
             try {
                 console.log(`[Yinetsu] Trying HuggingFace/${model}...`);
 
-                const response = await fetch(`${HF_ENDPOINT}/${model}`, {
+                const response = await fetch(HF_ENDPOINT, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        inputs: fullPrompt,
-                        parameters: {
-                            temperature: 0.6,
-                            max_new_tokens: 512,
-                            return_full_text: false
-                        }
+                        model: model,
+                        messages: messages,
+                        temperature: 0.6,
+                        max_tokens: 1024
                     })
                 });
 
@@ -103,49 +95,33 @@ ACTION RULES:
                     continue;
                 }
 
-                // Rate limited
                 if (response.status === 429) {
                     debugLog.push(`HF/${model}: rate limited`);
                     continue;
                 }
-
-                // Model loading (cold start) — retry
                 if (response.status === 503 || (data.error && data.error.includes('loading'))) {
                     debugLog.push(`HF/${model}: model loading, retrying...`);
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }
-
-                // Error
                 if (response.status !== 200) {
                     const errMsg = data.error || rawText.substring(0, 100);
                     debugLog.push(`HF/${model}: HTTP ${response.status} — ${errMsg}`);
                     continue;
                 }
 
-                // Parse response
-                let reply = null;
-                if (Array.isArray(data) && data[0]?.generated_text) {
-                    reply = data[0].generated_text;
-                } else if (typeof data === 'string') {
-                    reply = data;
-                } else if (data.generated_text) {
-                    reply = data.generated_text;
-                }
-
+                const reply = data.choices?.[0]?.message?.content;
                 if (!reply || reply.trim() === '') {
                     debugLog.push(`HF/${model}: empty reply`);
                     continue;
                 }
 
-                reply = reply.trim();
-
                 console.log(`[Yinetsu] ✅ HuggingFace/${model}`);
                 return res.status(200).json({
-                    reply: reply,
+                    reply: reply.trim(),
                     provider: 'huggingface',
                     model: model,
-                    usage: null
+                    usage: data.usage || null
                 });
 
             } catch (err) {
@@ -157,7 +133,6 @@ ACTION RULES:
         debugLog.push('HuggingFace: API key missing');
     }
 
-    // ═══ ALL FAILED ═══
     console.log('[Yinetsu] ❌ HuggingFace failed:', debugLog.join(' | '));
 
     return res.status(503).json({
