@@ -1,29 +1,26 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback (Oct 2026 FINAL)
-// Order: Groq (4 models) → Gemini → OpenRouter
-// Total daily budget: ~4,500+ requests/day
+// YINETSU AI — Multi-Provider Fallback (Oct 2026)
+// TEST BUILD: openai/gpt-oss-120b COMMENTED OUT
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Groq model chain (4 models — auto-switch if one fails)
+// Groq model chain — gpt-oss-120b commented out for testing
 const GROQ_MODELS = [
     'llama-3.1-8b-instant',
     'llama-3.3-70b-versatile',
     'gemma2-9b-it',
-    'openai/gpt-oss-120b',
+    // 'openai/gpt-oss-120b',   ← COMMENTED OUT FOR TEST
 ];
 
-// Gemini fallback models
 const GEMINI_MODELS = [
     'gemini-3.5-flash-lite',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
 ];
 
-// OpenRouter fallback models
 const OPENROUTER_MODELS = [
     'google/gemma-4-31b:free',
     'nvidia/nemotron-3-super:free',
@@ -71,7 +68,6 @@ ACTION RULES:
         ? customSystem + "\n\n⚠️ IMPORTANT: You have CONVERSATION MEMORY. If user gives short replies, treat them as answers to your previous questions. Continue naturally."
         : defaultSystem;
 
-    // Parse history
     let history = [];
     if (historyRaw) {
         try {
@@ -80,7 +76,6 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
-    // Build messages
     const messages = [{ role: 'system', content: systemPrompt }];
     for (const item of history) {
         if (item && item.role && item.content) {
@@ -94,9 +89,7 @@ ACTION RULES:
 
     const debugLog = [];
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ (multi-model fallback)
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 1: GROQ ═══
     if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
@@ -120,12 +113,10 @@ ACTION RULES:
                     debugLog.push(`Groq/${model}: rate limited`);
                     continue;
                 }
-
                 if (data.error) {
                     debugLog.push(`Groq/${model}: ${(data.error.message || '').substring(0, 60)}`);
                     continue;
                 }
-
                 const reply = data.choices?.[0]?.message?.content;
                 if (!reply) {
                     debugLog.push(`Groq/${model}: empty`);
@@ -133,13 +124,7 @@ ACTION RULES:
                 }
 
                 console.log(`[Yinetsu] ✅ Groq/${model}`);
-                return res.status(200).json({
-                    reply: reply,
-                    provider: 'groq',
-                    model: model,
-                    usage: data.usage || null
-                });
-
+                return res.status(200).json({ reply, provider: 'groq', model, usage: data.usage || null });
             } catch (err) {
                 debugLog.push(`Groq/${model}: ${(err.message || '').substring(0, 60)}`);
                 continue;
@@ -149,9 +134,7 @@ ACTION RULES:
         debugLog.push('Groq: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GOOGLE GEMINI
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 2: GEMINI ═══
     if (process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
@@ -171,14 +154,9 @@ ACTION RULES:
 
                 const geminiBody = {
                     contents: geminiContents,
-                    generationConfig: {
-                        temperature: 0.6,
-                        maxOutputTokens: 1024
-                    }
+                    generationConfig: { temperature: 0.6, maxOutputTokens: 1024 }
                 };
-                if (systemInstruction) {
-                    geminiBody.systemInstruction = systemInstruction;
-                }
+                if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
                 const response = await fetch(url, {
@@ -193,12 +171,10 @@ ACTION RULES:
                     debugLog.push(`Gemini/${model}: rate limited`);
                     continue;
                 }
-
                 if (data.error) {
                     debugLog.push(`Gemini/${model}: ${(data.error.message || '').substring(0, 60)}`);
                     continue;
                 }
-
                 const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (!reply) {
                     debugLog.push(`Gemini/${model}: empty`);
@@ -206,13 +182,7 @@ ACTION RULES:
                 }
 
                 console.log(`[Yinetsu] ✅ Gemini/${model}`);
-                return res.status(200).json({
-                    reply: reply,
-                    provider: 'gemini',
-                    model: model,
-                    usage: data.usageMetadata || null
-                });
-
+                return res.status(200).json({ reply, provider: 'gemini', model, usage: data.usageMetadata || null });
             } catch (err) {
                 debugLog.push(`Gemini/${model}: ${(err.message || '').substring(0, 60)}`);
                 continue;
@@ -222,9 +192,7 @@ ACTION RULES:
         debugLog.push('Gemini: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 3: OPENROUTER
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 3: OPENROUTER ═══
     if (process.env.OPENROUTER_API_KEY) {
         for (const model of OPENROUTER_MODELS) {
             try {
@@ -250,12 +218,10 @@ ACTION RULES:
                     debugLog.push(`OpenRouter/${model}: rate limited`);
                     continue;
                 }
-
                 if (data.error) {
                     debugLog.push(`OpenRouter/${model}: ${(data.error.message || '').substring(0, 60)}`);
                     continue;
                 }
-
                 const reply = data.choices?.[0]?.message?.content;
                 if (!reply) {
                     debugLog.push(`OpenRouter/${model}: empty`);
@@ -263,13 +229,7 @@ ACTION RULES:
                 }
 
                 console.log(`[Yinetsu] ✅ OpenRouter/${model}`);
-                return res.status(200).json({
-                    reply: reply,
-                    provider: 'openrouter',
-                    model: model,
-                    usage: data.usage || null
-                });
-
+                return res.status(200).json({ reply, provider: 'openrouter', model, usage: data.usage || null });
             } catch (err) {
                 debugLog.push(`OpenRouter/${model}: ${(err.message || '').substring(0, 60)}`);
                 continue;
@@ -279,9 +239,7 @@ ACTION RULES:
         debugLog.push('OpenRouter: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ALL PROVIDERS EXHAUSTED
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ ALL FAILED ═══
     console.log('[Yinetsu] ❌ All providers failed:', debugLog.join(' | '));
 
     return res.status(503).json({
