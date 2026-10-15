@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback + Local Responses (Oct 2026)
-// Features: Local Greetings · Quick Commands · Caching · Timeout
+// YINETSU AI — Phase 10: Advanced Features (Oct 2026)
+// Features: User Memory · Smart Context · Proactive · Error Recovery
+// Plus: Local responses, caching, multi-provider fallback
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -9,14 +10,78 @@ const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const POLLINATIONS_ENDPOINT = 'https://text.pollinations.ai/openai/chat/completions';
 
 const PROVIDER_TIMEOUT_MS = 8000;
+const MAX_HISTORY = 20; // Feature 2: Increased from 10 to 20
 
 // ═══════════════════════════════════════════════════════════════
-// LOCAL RESPONSES (ZERO RPD)
+// FEATURE 1: USER MEMORY (per IP)
+// ═══════════════════════════════════════════════════════════════
+const USER_MEMORY = new Map();
+const USER_MEMORY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_USER_MEMORIES = 1000;
+
+function getUserMemory(ip) {
+    const entry = USER_MEMORY.get(ip);
+    if (!entry) return { lastSearchType: null, lastSearchQuery: null, commonQueries: {}, lastTheme: null, messageCount: 0, lastSeen: Date.now() };
+    if (Date.now() - entry.lastSeen > USER_MEMORY_TTL_MS) {
+        USER_MEMORY.delete(ip);
+        return { lastSearchType: null, lastSearchQuery: null, commonQueries: {}, lastTheme: null, messageCount: 0, lastSeen: Date.now() };
+    }
+    return entry;
+}
+
+function updateUserMemory(ip, updates) {
+    const mem = getUserMemory(ip);
+    Object.assign(mem, updates, { lastSeen: Date.now() });
+    if (!mem.commonQueries) mem.commonQueries = {};
+    USER_MEMORY.set(ip, mem);
+    
+    // Cleanup old entries
+    if (USER_MEMORY.size > MAX_USER_MEMORIES) {
+        const now = Date.now();
+        for (const [k, v] of USER_MEMORY.entries()) {
+            if (now - v.lastSeen > USER_MEMORY_TTL_MS) USER_MEMORY.delete(k);
+        }
+    }
+}
+
+// ═══ Detect preferences from user message ═══
+function detectPreferences(message) {
+    const lower = message.toLowerCase();
+    const prefs = {};
+    
+    // Detect search intent
+    if (lower.includes('phonk')) { prefs.lastSearchQuery = 'phonk'; prefs.lastSearchType = 'audio'; }
+    else if (lower.includes('kpop')) { prefs.lastSearchQuery = 'kpop'; prefs.lastSearchType = 'audio'; }
+    else if (lower.includes('opm') || lower.includes('filipino')) { prefs.lastSearchQuery = 'opm'; prefs.lastSearchType = 'audio'; }
+    else if (lower.includes('music') || lower.includes('song')) { prefs.lastSearchType = 'audio'; }
+    
+    // Detect theme preference
+    const themeMatch = lower.match(/(?:theme|tema)\s*(?:to\s*)?(\w+)/);
+    if (themeMatch) prefs.lastTheme = themeMatch[1];
+    
+    return prefs;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FEATURE 3: PROACTIVE SUGGESTIONS (frequency-limited)
+// ═══════════════════════════════════════════════════════════════
+const SUGGESTION_COOLDOWN = new Map(); // ip -> last suggestion time
+const SUGGESTION_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+function canSendSuggestion(ip, messageCount) {
+    // Only suggest every 5+ messages
+    if (messageCount < 5 || messageCount % 5 !== 0) return false;
+    const last = SUGGESTION_COOLDOWN.get(ip) || 0;
+    if (Date.now() - last < SUGGESTION_MIN_INTERVAL_MS) return false;
+    SUGGESTION_COOLDOWN.set(ip, Date.now());
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAL RESPONSES (ZERO RPD) — From Phase B
 // ═══════════════════════════════════════════════════════════════
 
-// ═══ GREETINGS (Multi-language, lifetime cache) ═══
 const LOCAL_GREETINGS = {
-    // English
     "hi": "Hello! I'm Yinetsu AI. How can I help you today?",
     "hello": "Hello! I'm Yinetsu AI. How can I help you today?",
     "hey": "Hey there! What can I do for you?",
@@ -25,7 +90,6 @@ const LOCAL_GREETINGS = {
     "good morning": "Good morning! How can I help you today?",
     "good afternoon": "Good afternoon! How can I help?",
     "good evening": "Good evening! How can I help?",
-    // Filipino
     "kamusta": "Kamusta! Ako si Yinetsu AI. Paano kita matutulungan?",
     "kumusta": "Kumusta! Ako si Yinetsu AI. Paano kita matutulungan?",
     "musta": "Musta! Anong maitutulong ko sa iyo?",
@@ -38,126 +102,73 @@ const LOCAL_GREETINGS = {
     "salamat": "Walang anuman! Anong iba pang maitutulong ko?",
     "thank you": "You're welcome! Anything else I can help with?",
     "thanks": "You're welcome! Anything else?",
-    // Spanish
     "hola": "¡Hola! Soy Yinetsu AI. ¿Cómo puedo ayudarte?",
     "buenos dias": "¡Buenos días! ¿Cómo puedo ayudarte hoy?",
     "buenas tardes": "¡Buenas tardes! ¿Cómo puedo ayudarte?",
     "buenas noches": "¡Buenas noches! ¿Cómo puedo ayudarte?",
     "que tal": "¡Qué tal! Soy Yinetsu AI. ¿Cómo puedo ayudarte?",
     "gracias": "¡De nada! ¿Hay algo más en lo que pueda ayudar?",
-    // Korean
     "안녕": "안녕하세요! 저는 Yinetsu AI입니다. 무엇을 도와드릴까요?",
     "안녕하세요": "안녕하세요! 저는 Yinetsu AI입니다. 무엇을 도와드릴까요?",
     "하이": "하이! 무엇을 도와드릴까요?",
-    "고마워": "천만에요! 더 도와드릴 일이 있나요?",
-    // Japanese
     "こんにちは": "こんにちは！Yinetsu AIです。何をお手伝いしましょうか？",
     "やあ": "やあ！何かお手伝いしましょうか？",
     "おはよう": "おはようございます！今日は何をお手伝いしましょうか？",
     "こんばんは": "こんばんは！何かお手伝いしましょうか？",
-    "ありがとう": "どういたしまして！他に何かお手伝いしましょうか？",
-    // Portuguese
     "olá": "Olá! Sou Yinetsu AI. Como posso ajudá-lo?",
     "oi": "Oi! Sou Yinetsu AI. Como posso ajudá-lo?",
     "bom dia": "Bom dia! Como posso ajudá-lo hoje?",
-    "obrigado": "De nada! Posso ajudar em mais alguma coisa?",
-    // Chinese
     "你好": "你好！我是 Yinetsu AI。我能帮你什么？",
     "嗨": "嗨！有什么可以帮你的吗？",
-    "谢谢": "不客气！还有什么我能帮你的吗？",
-    // German / French / Italian
     "hallo": "Hallo! Ich bin Yinetsu AI. Wie kann ich dir helfen?",
     "bonjour": "Bonjour ! Je suis Yinetsu AI. Comment puis-je vous aider ?",
     "salut": "Salut ! Je suis Yinetsu AI. Comment puis-je vous aider ?",
     "ciao": "Ciao! Sono Yinetsu AI. Come posso aiutarti?",
 };
 
-// ═══ QUICK COMMANDS (Lifetime cache, pattern-based) ═══
-// Format: { pattern: regex, template: string }
-// {0}, {1}, {2}... = captured groups
 const LOCAL_QUICK_COMMANDS = [
-    // Fly
     { pattern: /^(?:fly|flight|lipad|patag)\s*(?:on|enable|activate)?$/i, template: "[ACTION:fly:on]\n✅ Fly: ON" },
     { pattern: /^(?:fly|flight|lipad|patag)\s*(?:off|disable|deactivate|stop)$/i, template: "[ACTION:fly:off]\n✅ Fly: OFF" },
-
-    // Noclip
     { pattern: /^(?:noclip|no\s*clip|ghost\s*mode)\s*(?:on|enable)?$/i, template: "[ACTION:noclip:on]\n✅ Noclip: ON" },
     { pattern: /^(?:noclip|no\s*clip|ghost\s*mode)\s*(?:off|disable)$/i, template: "[ACTION:noclip:off]\n✅ Noclip: OFF" },
-
-    // Fullbright
     { pattern: /^(?:fullbright|full\s*bright|bright(?:ness)?)\s*(?:on|enable)?$/i, template: "[ACTION:fullbright:on]\n✅ Fullbright: ON" },
     { pattern: /^(?:fullbright|full\s*bright)\s*(?:off|disable)$/i, template: "[ACTION:fullbright:off]\n✅ Fullbright: OFF" },
-
-    // Anti-Fling
     { pattern: /^anti[-\s]*fling\s*(?:on|enable)?$/i, template: "[ACTION:anti_fling:on]\n✅ Anti-Fling: ON" },
     { pattern: /^anti[-\s]*fling\s*(?:off|disable)$/i, template: "[ACTION:anti_fling:off]\n✅ Anti-Fling: OFF" },
-
-    // Rejoin Death
     { pattern: /^rejoin\s*(?:on\s*)?death\s*(?:on|enable)?$/i, template: "[ACTION:rejoin_death:on]\n✅ Rejoin Death: ON" },
     { pattern: /^rejoin\s*(?:on\s*)?death\s*(?:off|disable)$/i, template: "[ACTION:rejoin_death:off]\n✅ Rejoin Death: OFF" },
-
-    // Auto-Clicker
     { pattern: /^auto[-\s]*click(?:er)?\s*(?:on|enable)?$/i, template: "[ACTION:auto_clicker:on]\n✅ Auto-Clicker: ON" },
     { pattern: /^auto[-\s]*click(?:er)?\s*(?:off|disable)$/i, template: "[ACTION:auto_clicker:off]\n✅ Auto-Clicker: OFF" },
-
-    // Negate Args
     { pattern: /^(?:negate(?:\s*args)?|neg)\s*(?:on|enable)?$/i, template: "[ACTION:negate_args:on]\n✅ Negate: ON" },
     { pattern: /^(?:negate(?:\s*args)?|neg)\s*(?:off|disable)$/i, template: "[ACTION:negate_args:off]\n✅ Negate: OFF" },
-
-    // Multiply Args
     { pattern: /^(?:multiply|mul|x9999)\s*(?:on|enable)?$/i, template: "[ACTION:multiply_args:on]\n✅ Multiply: ON" },
     { pattern: /^(?:multiply|mul|x9999)\s*(?:off|disable)$/i, template: "[ACTION:multiply_args:off]\n✅ Multiply: OFF" },
-
-    // Server / Rejoin
     { pattern: /^(?:server\s*hop|hop\s*server|lipat\s*server|change\s*server)$/i, template: "[ACTION:server_hop_smart]\n🔄 Server hopping..." },
     { pattern: /^(?:rejoin(?:\s*server)?|balik\s*server)$/i, template: "[ACTION:rejoin_current]\n🔄 Rejoining server..." },
-
-    // Copy
     { pattern: /^copy\s*job\s*id$/i, template: "[ACTION:copy_jobid]\n📋 JobId copied" },
     { pattern: /^copy\s*(?:game\s*)?link$/i, template: "[ACTION:copy_game_link]\n🔗 Link copied" },
     { pattern: /^copy\s*place\s*id$/i, template: "[ACTION:copy_place_id]\n📋 Place ID copied" },
-
-    // Save / Load Position
     { pattern: /^save\s*(?:my\s*)?pos(?:ition)?$/i, template: "[ACTION:save_position]\n✅ Position saved" },
     { pattern: /^load\s*(?:my\s*)?pos(?:ition)?$/i, template: "[ACTION:load_position]\n✅ Teleported back" },
-
-    // Recording
     { pattern: /^(?:start\s*)?rec(?:ording)?$/i, template: "[ACTION:start_recording]\n⏺ Recording started" },
     { pattern: /^stop\s*rec(?:ording)?$/i, template: "[ACTION:stop_recording]\n⏹ Recording stopped" },
-
-    // Sequence
     { pattern: /^play\s*seq(?:uence)?$/i, template: "[ACTION:play_sequence]\n▶ Playing sequence" },
     { pattern: /^stop\s*seq(?:uence)?$/i, template: "[ACTION:stop_sequence]\n⏹ Sequence stopped" },
-
-    // Music
     { pattern: /^(?:play\s*music|music\s*play)$/i, template: "[ACTION:play_music]\n▶ Music playing" },
     { pattern: /^(?:pause\s*music|music\s*pause)$/i, template: "[ACTION:pause_music]\n⏸ Music paused" },
     { pattern: /^(?:stop\s*music|music\s*stop)$/i, template: "[ACTION:stop_music]\n⏹ Music stopped" },
     { pattern: /^next\s*(?:track|song)$/i, template: "[ACTION:next_track]\n⏭ Next track" },
     { pattern: /^(?:prev(?:ious)?\s*(?:track|song))$/i, template: "[ACTION:prev_track]\n⏮ Previous track" },
-
-    // Speed (with number)
     { pattern: /^(?:set\s*)?(?:speed|walkspeed|bilis)\s*(?:to\s*)?(\d+)$/i, template: "[ACTION:set_speed:{0}]\n✅ Speed: {0}" },
-
-    // Jump (with number)
     { pattern: /^(?:set\s*)?(?:jump|jumppower|jump\s*power|talon)\s*(?:to\s*)?(\d+)$/i, template: "[ACTION:set_jump:{0}]\n✅ Jump: {0}" },
-
-    // Teleport to player
     { pattern: /^tp\s*(?:to\s*)?(.+)$/i, template: "[ACTION:teleport_to:{0}]\n✅ Teleporting..." },
     { pattern: /^teleport\s*(?:to\s*)?(.+)$/i, template: "[ACTION:teleport_to:{0}]\n✅ Teleporting..." },
-
-    // FPS Boost
     { pattern: /^(?:enable\s*)?fps\s*(?:boost|booster)$/i, template: "[ACTION:enable_fps_boost]\n🚀 FPS Boost: ON" },
     { pattern: /^disable\s*fps\s*(?:boost|booster)$/i, template: "[ACTION:disable_fps_boost]\nFPS Boost: OFF" },
-
-    // Help
     { pattern: /^help$/i, template: "📖 I can help with: fly, noclip, fullbright, speed, jump, teleport, server hop, rejoin, music controls, and more! Just ask naturally in any language." },
-
-    // Game Info
     { pattern: /^(?:game\s*info|what\s*game|anong\s*game(?:\s*to)?)$/i, template: "[ACTION:game_info]\n🎮 Getting game info..." },
 ];
 
-// ═══ Helper: Apply template with captured groups ═══
 function applyTemplate(template, match) {
     let result = template;
     for (let i = 1; i < match.length; i++) {
@@ -166,40 +177,21 @@ function applyTemplate(template, match) {
     return result;
 }
 
-// ═══ Helper: Check local response ═══
 function checkLocalResponse(message, hasHistory) {
-    // Clean message (strip trailing punctuation)
     const clean = message.trim().toLowerCase().replace(/[!?.,;:]+$/, '');
-
-    // 1. Greetings — only when no history (first message)
     if (!hasHistory && LOCAL_GREETINGS[clean]) {
-        return {
-            reply: LOCAL_GREETINGS[clean],
-            provider: 'local',
-            model: 'greeting',
-            cached: true,
-            local: true
-        };
+        return { reply: LOCAL_GREETINGS[clean], provider: 'local', model: 'greeting', cached: true, local: true };
     }
-
-    // 2. Quick commands — always (standalone)
     for (const cmd of LOCAL_QUICK_COMMANDS) {
         const match = message.trim().match(cmd.pattern);
         if (match) {
-            return {
-                reply: applyTemplate(cmd.template, match),
-                provider: 'local',
-                model: 'quick-command',
-                cached: true,
-                local: true
-            };
+            return { reply: applyTemplate(cmd.template, match), provider: 'local', model: 'quick-command', cached: true, local: true };
         }
     }
-
     return null;
 }
 
-// ═══ CACHING (chat, 5 min TTL) ═══
+// ═══ CACHING (5 min TTL) ═══
 const CACHE = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -212,10 +204,7 @@ function makeCacheKey(messages) {
 function getCached(key) {
     const entry = CACHE.get(key);
     if (!entry) return null;
-    if (Date.now() - entry.time > CACHE_TTL_MS) {
-        CACHE.delete(key);
-        return null;
-    }
+    if (Date.now() - entry.time > CACHE_TTL_MS) { CACHE.delete(key); return null; }
     return entry.response;
 }
 
@@ -240,7 +229,6 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     }
 }
 
-// ═══ NORMALIZE ERROR ═══
 function extractError(data, rawText) {
     if (!data) return rawText?.substring(0, 100) || 'Unknown error';
     if (typeof data === 'string') return data.substring(0, 100);
@@ -263,18 +251,8 @@ function isRateLimit(status, data, rawText) {
 }
 
 // ═══ MODELS ═══
-const GROQ_MODELS = [
-    'qwen/qwen3.8-27b',
-    'openai/gpt-oss-120b',
-    'openai/gpt-oss-20b',
-];
-
-const GEMINI_MODELS = [
-    'gemini-3.5-flash-lite',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-];
-
+const GROQ_MODELS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 const OPENROUTER_MODELS = [
     'meta-llama/llama-3.3-70b-instruct:free',
     'meta-llama/llama-3.1-8b-instruct:free',
@@ -282,7 +260,6 @@ const OPENROUTER_MODELS = [
     'nvidia/nemotron-3-super:free',
     'nvidia/nemotron-3.5-lightning:free',
 ];
-
 const POLLINATIONS_MODELS = ['openai-fast'];
 
 // ═══════════════════════════════════════════════════════════════
@@ -304,7 +281,24 @@ export default async function handler(req, res) {
         return res.status(400).json({ reply: "No message provided." });
     }
 
-    const defaultSystem = `You are Yinetsu AI, assistant for the Yinetsu Remote Spy Roblox script.
+    // ═══ GET CLIENT IP (for user memory) ═══
+    const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
+                     req.headers['x-real-ip'] || 
+                     'unknown';
+
+    // ═══ GET USER MEMORY ═══
+    const userMem = getUserMemory(clientIp);
+    const messageCount = (userMem.messageCount || 0) + 1;
+
+    // ═══ DETECT PREFERENCES ═══
+    const prefs = detectPreferences(message);
+    updateUserMemory(clientIp, { 
+        ...prefs, 
+        messageCount,
+    });
+
+    // ═══ BUILD SYSTEM PROMPT WITH FEATURES 1, 3, 4 ═══
+    const baseSystem = customSystem || `You are Yinetsu AI, assistant for the Yinetsu Remote Spy Roblox script.
 
 CRITICAL RULES:
 1. Detect the user's language and ALWAYS reply in the SAME language. Korean→Korean, Spanish→Spanish, Tagalog→Tagalog, Portuguese→Portuguese, Japanese→Japanese.
@@ -317,9 +311,29 @@ ACTION RULES:
 - After the action tag, write a SHORT confirmation in the user's language.
 - Be concise and friendly.`;
 
-    const systemPrompt = customSystem
-        ? customSystem + "\n\n⚠️ IMPORTANT: You have CONVERSATION MEMORY. If user gives short replies, treat them as answers to your previous questions. Continue naturally."
-        : defaultSystem;
+    // Feature 1: User Memory context
+    let memoryContext = '';
+    if (userMem.lastSearchType || userMem.lastSearchQuery || userMem.lastTheme) {
+        memoryContext = '\n\n🧠 USER CONTEXT (from previous conversations):';
+        if (userMem.lastSearchQuery) memoryContext += `\n- Last search: "${userMem.lastSearchQuery}" (${userMem.lastSearchType})`;
+        else if (userMem.lastSearchType) memoryContext += `\n- Last search type: ${userMem.lastSearchType}`;
+        if (userMem.lastTheme) memoryContext += `\n- Preferred theme: ${userMem.lastTheme}`;
+        memoryContext += `\n- Total messages: ${messageCount}`;
+    }
+
+    // Feature 3: Proactive Suggestions
+    const canSuggest = canSendSuggestion(clientIp, messageCount);
+    let suggestionInstruction = '';
+    if (canSuggest) {
+        suggestionInstruction = '\n\n💡 PROACTIVE MODE: You may add ONE short helpful suggestion at the end (max 1 line). Example: "Pro tip: Try 'fly on' for easier movement!" Only if relevant.';
+    }
+
+    // Feature 4: Error Recovery
+    const errorRecoveryInstruction = `
+
+🩹 ERROR RECOVERY: If user's message is unclear or has typos, suggest 2-3 common commands they might mean. Example: "Hindi ko naintindihan. Try: 'set speed 100', 'fly on', or 'hanap mo phonk'?"`;
+
+    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction;
 
     let history = [];
     if (historyRaw) {
@@ -329,16 +343,17 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
-    // ═══ CHECK LOCAL RESPONSE FIRST (ZERO RPD) ═══
+    // ═══ CHECK LOCAL RESPONSE (ZERO RPD) ═══
     const localResponse = checkLocalResponse(message, history.length > 0);
     if (localResponse) {
         console.log(`[Yinetsu] ⚡ LOCAL: ${localResponse.model}`);
         return res.status(200).json(localResponse);
     }
 
-    // ═══ BUILD MESSAGES ═══
+    // ═══ BUILD MESSAGES (Feature 2: Smart Context — 20 messages) ═══
     const messages = [{ role: 'system', content: systemPrompt }];
-    for (const item of history) {
+    const recentHistory = history.slice(-MAX_HISTORY);
+    for (const item of recentHistory) {
         if (item && item.role && item.content) {
             messages.push({
                 role: item.role === 'user' ? 'user' : 'assistant',
@@ -368,7 +383,7 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -406,7 +421,7 @@ ACTION RULES:
                     if (msg.role === 'system') systemInstruction = { parts: [{ text: msg.content }] };
                     else geminiContents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
                 }
-                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.6, maxOutputTokens: 1024 } };
+                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.7, maxOutputTokens: 1024 } };
                 if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
@@ -453,7 +468,7 @@ ACTION RULES:
                         'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
                         'X-Title': 'Yinetsu AI'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -491,7 +506,7 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.POLLINATIONS_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
