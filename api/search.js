@@ -62,14 +62,14 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — WITH LIVE PLAYER COUNT FETCHER
+// GAME SEARCH — ACCURATE LIVE PLAYER COUNT & CREATOR FIX
 // ============================================
 async function searchGame(query, res) {
     const rawResults = [];
     const seenIds = new Set();
     const lowerQuery = query.toLowerCase().trim();
 
-    // 1. Kunin ang mga laro gamit ang Tavily web search
+    // 1. Kunin ang Place IDs gamit ang Tavily Web Search
     const tavilyKey = process.env.TAVILY_API_KEY;
     try {
         if (tavilyKey && tavilyKey.length > 10) {
@@ -97,7 +97,7 @@ async function searchGame(query, res) {
                                         id: pid,
                                         placeId: pid,
                                         name: (r.title || "Roblox Game").replace(/\s*[|\-–].*$/, "").trim(),
-                                        creator: "Roblox",
+                                        creator: "Roblox User",
                                         playing: 0,
                                         url: "https://www.roblox.com/games/" + pid,
                                         snippet: (r.content || "").slice(0, 120)
@@ -111,7 +111,7 @@ async function searchGame(query, res) {
         }
     } catch (e) { /* ignore */ }
 
-    // Siguraduhing laging nandoon ang kilalang opisyal na Place ID kung na-search ang Blox Fruits
+    // Siguraduhing kasama ang Official Place ID ng Blox Fruits
     if (lowerQuery.includes("blox fruit") && !seenIds.has("2753915549")) {
         seenIds.add("2753915549");
         rawResults.unshift({
@@ -125,32 +125,53 @@ async function searchGame(query, res) {
         });
     }
 
-    // 2. Kunin ang totoong Live Player Count mula sa Roblox Games API gamit ang Place IDs
+    // 2. Fetch Live Player Count & Game Info gamit ang Universe Resolution
     if (rawResults.length > 0) {
         try {
-            const placeIdsStr = rawResults.map(g => g.placeId).join(",");
-            const gamesApiUrl = `https://games.roblox.com/v1/games/multiget-place-details?placeIds=${placeIdsStr}`;
-            const apiResp = await fetch(gamesApiUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-            });
-            if (apiResp.ok) {
-                const apiData = await apiResp.json();
-                if (Array.isArray(apiData)) {
-                    const countMap = {};
-                    const nameMap = {};
-                    for (const item of apiData) {
-                        if (item && item.placeId) {
-                            countMap[String(item.placeId)] = item.playing || 0;
-                            if (item.name) nameMap[String(item.placeId)] = item.name;
+            // Kunin ang Universe IDs para sa bawat Place ID (batch process max 10)
+            const targetGames = rawResults.slice(0, 10);
+            const universeMap = {}; // placeId -> universeId
+
+            await Promise.all(targetGames.map(async (g) => {
+                try {
+                    const uResp = await fetch(`https://apis.roblox.com/universes/v1/places/${g.placeId}/universe`, {
+                        headers: { 'User-Agent': 'Mozilla/5.0' }
+                    });
+                    if (uResp.ok) {
+                        const uData = await uResp.json();
+                        if (uData && uData.universeId) {
+                            universeMap[g.placeId] = String(uData.universeId);
                         }
                     }
-                    // I-update ang playing count at pangalan galing sa official API kung available
-                    for (const game of rawResults) {
-                        if (countMap[game.placeId] !== undefined) {
-                            game.playing = countMap[game.placeId];
+                } catch (e) { /* ignore */ }
+            }));
+
+            const universeIds = Object.values(universeMap);
+            if (universeIds.length > 0) {
+                const gamesUrl = `https://games.roblox.com/v1/games?universeIds=${universeIds.join(",")}`;
+                const gResp = await fetch(gamesUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+                });
+                if (gResp.ok) {
+                    const gData = await gResp.json();
+                    if (gData && Array.isArray(gData.data)) {
+                        const infoMap = {};
+                        for (const item of gData.data) {
+                            infoMap[String(item.id)] = {
+                                playing: item.playing || 0,
+                                name: item.name,
+                                creator: item.creator ? item.creator.name : "Unknown"
+                            };
                         }
-                        if (nameMap[game.placeId]) {
-                            game.name = nameMap[game.placeId];
+
+                        for (const game of rawResults) {
+                            const uId = universeMap[game.placeId];
+                            if (uId && infoMap[uId]) {
+                                game.playing = infoMap[uId].playing;
+                                game.name = infoMap[uId].name || game.name;
+                                game.creator = infoMap[uId].creator || game.creator;
+                                game.snippet = "Creator: " + game.creator + " · Playing: " + game.playing.toLocaleString();
+                            }
                         }
                     }
                 }
@@ -158,7 +179,7 @@ async function searchGame(query, res) {
         } catch (e) { /* ignore */ }
     }
 
-    // Sorting: Unahin ang eksaktong pangalan sa itaas, tapos i-sort ayon sa totoong player count (pinakamataas pataas)
+    // 3. Smart Sorting Logic: Exact match sa taas, at ayon sa Live Player Count
     rawResults.sort((a, b) => {
         const aExact = a.name.toLowerCase() === lowerQuery ? 1 : 0;
         const bExact = b.name.toLowerCase() === lowerQuery ? 1 : 0;
