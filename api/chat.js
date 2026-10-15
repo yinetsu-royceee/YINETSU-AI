@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // YINETSU AI — Multi-Provider Fallback (Oct 2026 Update)
-// TEMP TEST: Groq + Gemini disabled → force OpenRouter
+// Order: Groq (4 models) → Gemini → OpenRouter
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -22,12 +22,12 @@ const GEMINI_MODELS = [
     'gemini-2.5-flash',
 ];
 
-// OpenRouter fallback models (updated — Oct 2026 free catalog)
+// OpenRouter fallback models (updated from Oct 2026 free catalog)
 const OPENROUTER_MODELS = [
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'nvidia/nemotron-3-nano-30b-a3b:free',
-    'openai/gpt-oss-120b:free',
-    'meta-llama/llama-3.2-3b-instruct:free',
+    'google/gemma-4-31b:free',
+    'nvidia/nemotron-3-super:free',
+    'nvidia/nemotron-3.5-lightning:free',
+    'thinkingmachines/inkling-small:free',
 ];
 
 export default async function handler(req, res) {
@@ -94,9 +94,9 @@ ACTION RULES:
     const debugLog = [];
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ — TEMPORARILY DISABLED FOR TESTING
+    // PROVIDER 1: GROQ (multi-model fallback)
     // ═══════════════════════════════════════════════════════════════
-    if (false && process.env.GROQ_API_KEY) {
+    if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
                 const response = await fetch(GROQ_ENDPOINT, {
@@ -145,13 +145,13 @@ ACTION RULES:
             }
         }
     } else {
-        debugLog.push('Groq: DISABLED FOR TEST');
+        debugLog.push('Groq: API key missing');
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GOOGLE GEMINI — TEMPORARILY DISABLED FOR TESTING
+    // PROVIDER 2: GOOGLE GEMINI
     // ═══════════════════════════════════════════════════════════════
-    if (false && process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
                 // Convert messages to Gemini format
@@ -219,7 +219,7 @@ ACTION RULES:
             }
         }
     } else {
-        debugLog.push('Gemini: DISABLED FOR TEST');
+        debugLog.push('Gemini: API key missing');
     }
 
     // ═══════════════════════════════════════════════════════════════
