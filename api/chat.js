@@ -1,35 +1,15 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback (Oct 2026 FINAL)
-// Priority: Groq (Qwen → GPT-OSS) → Gemini → OpenRouter
-// Total capacity: ~5,000+ requests/day
+// YINETSU AI — HuggingFace ONLY TEST
+// All other providers disabled for testing
 // ═══════════════════════════════════════════════════════════════
 
-const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
-const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const HF_ENDPOINT = 'https://api-inference.huggingface.co/models';
 
-// ═══ GROQ MODELS (priority by RPD + tokens) ═══
-// Note: llama-3.1-8b-instant & gemma2-9b-it have been REMOVED from Groq catalog
-const GROQ_MODELS = [
-    'qwen/qwen3.8-27b',         // ~1,000 RPD, 2M TPD ⭐ highest tokens
-    'openai/gpt-oss-120b',      // ~1,000 RPD, 200K TPD
-    'openai/gpt-oss-20b',       // ~1,000 RPD
-];
-
-// ═══ GEMINI MODELS ═══
-const GEMINI_MODELS = [
-    'gemini-3.5-flash-lite',    // ~1,500 RPD (highest free tier)
-    'gemini-2.5-flash-lite',    // ~1,500 RPD
-    'gemini-2.5-flash',         // ~500 RPD
-];
-
-// ═══ OPENROUTER MODELS (Llama + free catalog) ═══
-const OPENROUTER_MODELS = [
-    'meta-llama/llama-3.3-70b-instruct:free',    // ~50-1,000 RPD ⭐ Llama priority
-    'meta-llama/llama-3.1-8b-instruct:free',     // ~50-1,000 RPD
-    'google/gemma-4-31b:free',                   // Google fallback
-    'nvidia/nemotron-3-super:free',              // NVIDIA fallback
-    'nvidia/nemotron-3.5-lightning:free',        // NVIDIA fallback
+// ═══ HUGGING FACE MODELS ═══
+const HF_MODELS = [
+    'meta-llama/Llama-3.3-70B-Instruct',
+    'Qwen/Qwen3.8-27B',
+    'meta-llama/Meta-Llama-3-8B-Instruct',
 ];
 
 export default async function handler(req, res) {
@@ -80,183 +60,109 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
-    const messages = [{ role: 'system', content: systemPrompt }];
+    // Build a single prompt string (HF doesn't support chat format natively for all models)
+    let fullPrompt = systemPrompt + "\n\n";
     for (const item of history) {
         if (item && item.role && item.content) {
-            messages.push({
-                role: item.role === 'user' ? 'user' : 'assistant',
-                content: String(item.content)
-            });
+            const role = item.role === 'user' ? 'User' : 'Assistant';
+            fullPrompt += role + ": " + item.content + "\n";
         }
     }
-    messages.push({ role: 'user', content: message });
+    fullPrompt += "User: " + message + "\nAssistant:";
 
     const debugLog = [];
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ (Qwen → GPT-OSS)
-    // ═══════════════════════════════════════════════════════════════
-    if (process.env.GROQ_API_KEY) {
-        for (const model of GROQ_MODELS) {
+    // ═══ HUGGING FACE ONLY ═══
+    if (process.env.HUGGINGFACE_API_KEY) {
+        for (const model of HF_MODELS) {
             try {
-                const response = await fetch(GROQ_ENDPOINT, {
+                console.log(`[Yinetsu] Trying HuggingFace/${model}...`);
+
+                const response = await fetch(`${HF_ENDPOINT}/${model}`, {
                     method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        model: model,
-                        messages: messages,
-                        temperature: 0.6,
-                        max_tokens: 1024
+                        inputs: fullPrompt,
+                        parameters: {
+                            temperature: 0.6,
+                            max_new_tokens: 512,
+                            return_full_text: false
+                        }
                     })
                 });
 
-                const data = await response.json();
+                const rawText = await response.text();
+                let data = null;
+                try {
+                    data = JSON.parse(rawText);
+                } catch (e) {
+                    debugLog.push(`HF/${model}: invalid JSON — ${rawText.substring(0, 80)}`);
+                    continue;
+                }
 
+                // Rate limited
                 if (response.status === 429) {
-                    debugLog.push(`Groq/${model}: rate limited`);
-                    continue;
-                }
-                if (data.error) {
-                    debugLog.push(`Groq/${model}: ${(data.error.message || '').substring(0, 60)}`);
-                    continue;
-                }
-                const reply = data.choices?.[0]?.message?.content;
-                if (!reply) {
-                    debugLog.push(`Groq/${model}: empty`);
+                    debugLog.push(`HF/${model}: rate limited`);
                     continue;
                 }
 
-                console.log(`[Yinetsu] ✅ Groq/${model}`);
-                return res.status(200).json({ reply, provider: 'groq', model, usage: data.usage || null });
-            } catch (err) {
-                debugLog.push(`Groq/${model}: ${(err.message || '').substring(0, 60)}`);
-                continue;
-            }
-        }
-    } else {
-        debugLog.push('Groq: API key missing');
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GEMINI
-    // ═══════════════════════════════════════════════════════════════
-    if (process.env.GEMINI_API_KEY) {
-        for (const model of GEMINI_MODELS) {
-            try {
-                const geminiContents = [];
-                let systemInstruction = null;
-
-                for (const msg of messages) {
-                    if (msg.role === 'system') {
-                        systemInstruction = { parts: [{ text: msg.content }] };
-                    } else {
-                        geminiContents.push({
-                            role: msg.role === 'user' ? 'user' : 'model',
-                            parts: [{ text: msg.content }]
-                        });
-                    }
+                // Model loading (cold start) — retry
+                if (response.status === 503 || (data.error && data.error.includes('loading'))) {
+                    debugLog.push(`HF/${model}: model loading, retrying...`);
+                    await new Promise(r => setTimeout(r, 3000));
+                    continue;
                 }
 
-                const geminiBody = {
-                    contents: geminiContents,
-                    generationConfig: { temperature: 0.6, maxOutputTokens: 1024 }
-                };
-                if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
+                // Error
+                if (response.status !== 200) {
+                    const errMsg = data.error || rawText.substring(0, 100);
+                    debugLog.push(`HF/${model}: HTTP ${response.status} — ${errMsg}`);
+                    continue;
+                }
 
-                const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(geminiBody)
+                // Parse response
+                let reply = null;
+                if (Array.isArray(data) && data[0]?.generated_text) {
+                    reply = data[0].generated_text;
+                } else if (typeof data === 'string') {
+                    reply = data;
+                } else if (data.generated_text) {
+                    reply = data.generated_text;
+                }
+
+                if (!reply || reply.trim() === '') {
+                    debugLog.push(`HF/${model}: empty reply`);
+                    continue;
+                }
+
+                reply = reply.trim();
+
+                console.log(`[Yinetsu] ✅ HuggingFace/${model}`);
+                return res.status(200).json({
+                    reply: reply,
+                    provider: 'huggingface',
+                    model: model,
+                    usage: null
                 });
 
-                const data = await response.json();
-
-                if (response.status === 429) {
-                    debugLog.push(`Gemini/${model}: rate limited`);
-                    continue;
-                }
-                if (data.error) {
-                    debugLog.push(`Gemini/${model}: ${(data.error.message || '').substring(0, 60)}`);
-                    continue;
-                }
-                const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!reply) {
-                    debugLog.push(`Gemini/${model}: empty`);
-                    continue;
-                }
-
-                console.log(`[Yinetsu] ✅ Gemini/${model}`);
-                return res.status(200).json({ reply, provider: 'gemini', model, usage: data.usageMetadata || null });
             } catch (err) {
-                debugLog.push(`Gemini/${model}: ${(err.message || '').substring(0, 60)}`);
+                debugLog.push(`HF/${model}: ${(err.message || '').substring(0, 80)}`);
                 continue;
             }
         }
     } else {
-        debugLog.push('Gemini: API key missing');
+        debugLog.push('HuggingFace: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 3: OPENROUTER (Llama priority)
-    // ═══════════════════════════════════════════════════════════════
-    if (process.env.OPENROUTER_API_KEY) {
-        for (const model of OPENROUTER_MODELS) {
-            try {
-                const response = await fetch(OPENROUTER_ENDPOINT, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
-                        'X-Title': 'Yinetsu AI'
-                    },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: messages,
-                        temperature: 0.6,
-                        max_tokens: 1024
-                    })
-                });
-
-                const data = await response.json();
-
-                if (response.status === 429) {
-                    debugLog.push(`OpenRouter/${model}: rate limited`);
-                    continue;
-                }
-                if (data.error) {
-                    debugLog.push(`OpenRouter/${model}: ${(data.error.message || '').substring(0, 60)}`);
-                    continue;
-                }
-                const reply = data.choices?.[0]?.message?.content;
-                if (!reply) {
-                    debugLog.push(`OpenRouter/${model}: empty`);
-                    continue;
-                }
-
-                console.log(`[Yinetsu] ✅ OpenRouter/${model}`);
-                return res.status(200).json({ reply, provider: 'openrouter', model, usage: data.usage || null });
-            } catch (err) {
-                debugLog.push(`OpenRouter/${model}: ${(err.message || '').substring(0, 60)}`);
-                continue;
-            }
-        }
-    } else {
-        debugLog.push('OpenRouter: API key missing');
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // ALL PROVIDERS EXHAUSTED
-    // ═══════════════════════════════════════════════════════════════
-    console.log('[Yinetsu] ❌ All providers failed:', debugLog.join(' | '));
+    // ═══ ALL FAILED ═══
+    console.log('[Yinetsu] ❌ HuggingFace failed:', debugLog.join(' | '));
 
     return res.status(503).json({
-        reply: `⏰ All AI providers are busy right now. Please try again in a few minutes.\n\nDebug: ${debugLog.slice(0, 5).join(' | ').substring(0, 200)}`,
-        error: 'All providers exhausted',
+        reply: `⏰ HuggingFace test failed. Debug: ${debugLog.join(' | ').substring(0, 300)}`,
+        error: 'HuggingFace exhausted',
         debug_log: debugLog
     });
 }
