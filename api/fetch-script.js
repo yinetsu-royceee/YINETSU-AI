@@ -1,3 +1,47 @@
+// ═══════════════════════════════════════════════════════════════
+// YINETSU FETCH-SCRIPT — Optimized (Oct 2026)
+// Features: 3-Week Caching · Timeout · Error Handling
+// ═══════════════════════════════════════════════════════════════
+
+const FETCH_TIMEOUT_MS = 8000;
+
+// ═══ CACHING (3 weeks TTL, by URL) ═══
+const SCRIPT_CACHE = new Map();
+const CACHE_TTL_MS = 3 * 7 * 24 * 60 * 60 * 1000; // 21 days
+
+function getCachedScript(url) {
+    const entry = SCRIPT_CACHE.get(url);
+    if (!entry) return null;
+    if (Date.now() - entry.time > CACHE_TTL_MS) {
+        SCRIPT_CACHE.delete(url);
+        return null;
+    }
+    return entry.data;
+}
+
+function setCachedScript(url, data) {
+    SCRIPT_CACHE.set(url, { data, time: Date.now() });
+    // Cleanup if too many entries
+    if (SCRIPT_CACHE.size > 500) {
+        const now = Date.now();
+        for (const [k, v] of SCRIPT_CACHE.entries()) {
+            if (now - v.time > CACHE_TTL_MS) SCRIPT_CACHE.delete(k);
+        }
+    }
+}
+
+// ═══ FETCH WITH TIMEOUT ═══
+async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// ═══ MAIN HANDLER ═══
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -11,7 +55,17 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "No URL provided" });
     }
 
-    // Whitelist check
+    // ═══ CHECK CACHE FIRST (ZERO FETCH) ═══
+    const cached = getCachedScript(url);
+    if (cached) {
+        console.log(`[Yinetsu Fetch] ⚡ CACHE HIT: ${url.substring(0, 60)}`);
+        return res.status(200).json({
+            ...cached,
+            cached: true
+        });
+    }
+
+    // ═══ WHITELIST CHECK ═══
     const allowedHosts = [
         'pastebin.com',
         'raw.githubusercontent.com',
@@ -39,11 +93,12 @@ export default async function handler(req, res) {
         });
     }
 
+    // ═══ FETCH WITH TIMEOUT ═══
     try {
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
             redirect: 'follow'
-        });
+        }, FETCH_TIMEOUT_MS);
 
         if (!response.ok) {
             return res.status(200).json({
@@ -55,22 +110,30 @@ export default async function handler(req, res) {
         const code = await response.text();
         const safety = analyzeCode(code, host);
 
-        return res.status(200).json({
+        const result = {
             url: url,
             host: host,
             length: code.length,
             safety: safety,
             code: code.slice(0, 5000),
             truncated: code.length > 5000
-        });
+        };
+
+        // ═══ SAVE TO CACHE ═══
+        setCachedScript(url, result);
+        console.log(`[Yinetsu Fetch] ✅ Fetched & cached: ${url.substring(0, 60)}`);
+
+        return res.status(200).json(result);
     } catch (err) {
+        const msg = err.name === 'AbortError' ? 'Request timed out' : err.message;
         return res.status(200).json({
-            error: "Fetch error: " + err.message,
+            error: "Fetch error: " + msg,
             safety: { level: "UNKNOWN" }
         });
     }
 }
 
+// ═══ SAFETY ANALYSIS (same as before) ═══
 function analyzeCode(code, host) {
     const lower = code.toLowerCase();
     const flags = [];
