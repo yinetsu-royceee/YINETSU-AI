@@ -1,7 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback + Optimization (Oct 2026)
-// Features: Caching · Timeout · Error Handling · Smart Retry
-// NO RATE LIMIT — all users have equal access
+// YINETSU AI — Multi-Provider Fallback + Local Responses (Oct 2026)
+// Features: Local Greetings · Quick Commands · Caching · Timeout
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -9,83 +8,202 @@ const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const POLLINATIONS_ENDPOINT = 'https://text.pollinations.ai/openai/chat/completions';
 
-// ═══ PROVIDER TIMEOUT (8 seconds per provider) ═══
 const PROVIDER_TIMEOUT_MS = 8000;
 
-// ═══ CACHING (in-memory, 5 minutes TTL) ═══
+// ═══════════════════════════════════════════════════════════════
+// LOCAL RESPONSES (ZERO RPD)
+// ═══════════════════════════════════════════════════════════════
+
+// ═══ GREETINGS (Multi-language, lifetime cache) ═══
+const LOCAL_GREETINGS = {
+    // English
+    "hi": "Hello! I'm Yinetsu AI. How can I help you today?",
+    "hello": "Hello! I'm Yinetsu AI. How can I help you today?",
+    "hey": "Hey there! What can I do for you?",
+    "yo": "Yo! What's up? How can I help?",
+    "sup": "Hey! What's up? How can I help?",
+    "good morning": "Good morning! How can I help you today?",
+    "good afternoon": "Good afternoon! How can I help?",
+    "good evening": "Good evening! How can I help?",
+    // Filipino
+    "kamusta": "Kamusta! Ako si Yinetsu AI. Paano kita matutulungan?",
+    "kumusta": "Kumusta! Ako si Yinetsu AI. Paano kita matutulungan?",
+    "musta": "Musta! Anong maitutulong ko sa iyo?",
+    "kamusta ka": "Mabuti naman! Ikaw, kamusta? Anong kailangan mo?",
+    "kumusta ka": "Mabuti naman! Ikaw, kamusta? Anong kailangan mo?",
+    "hoy": "Hoy! Anong balita? Paano kita matutulungan?",
+    "uy": "Uy! Anong kailangan mo?",
+    "hi po": "Hi po! Ako si Yinetsu AI. Paano kita matutulungan?",
+    "hello po": "Hello po! Ako si Yinetsu AI. Paano kita matutulungan?",
+    "salamat": "Walang anuman! Anong iba pang maitutulong ko?",
+    "thank you": "You're welcome! Anything else I can help with?",
+    "thanks": "You're welcome! Anything else?",
+    // Spanish
+    "hola": "¡Hola! Soy Yinetsu AI. ¿Cómo puedo ayudarte?",
+    "buenos dias": "¡Buenos días! ¿Cómo puedo ayudarte hoy?",
+    "buenas tardes": "¡Buenas tardes! ¿Cómo puedo ayudarte?",
+    "buenas noches": "¡Buenas noches! ¿Cómo puedo ayudarte?",
+    "que tal": "¡Qué tal! Soy Yinetsu AI. ¿Cómo puedo ayudarte?",
+    "gracias": "¡De nada! ¿Hay algo más en lo que pueda ayudar?",
+    // Korean
+    "안녕": "안녕하세요! 저는 Yinetsu AI입니다. 무엇을 도와드릴까요?",
+    "안녕하세요": "안녕하세요! 저는 Yinetsu AI입니다. 무엇을 도와드릴까요?",
+    "하이": "하이! 무엇을 도와드릴까요?",
+    "고마워": "천만에요! 더 도와드릴 일이 있나요?",
+    // Japanese
+    "こんにちは": "こんにちは！Yinetsu AIです。何をお手伝いしましょうか？",
+    "やあ": "やあ！何かお手伝いしましょうか？",
+    "おはよう": "おはようございます！今日は何をお手伝いしましょうか？",
+    "こんばんは": "こんばんは！何かお手伝いしましょうか？",
+    "ありがとう": "どういたしまして！他に何かお手伝いしましょうか？",
+    // Portuguese
+    "olá": "Olá! Sou Yinetsu AI. Como posso ajudá-lo?",
+    "oi": "Oi! Sou Yinetsu AI. Como posso ajudá-lo?",
+    "bom dia": "Bom dia! Como posso ajudá-lo hoje?",
+    "obrigado": "De nada! Posso ajudar em mais alguma coisa?",
+    // Chinese
+    "你好": "你好！我是 Yinetsu AI。我能帮你什么？",
+    "嗨": "嗨！有什么可以帮你的吗？",
+    "谢谢": "不客气！还有什么我能帮你的吗？",
+    // German / French / Italian
+    "hallo": "Hallo! Ich bin Yinetsu AI. Wie kann ich dir helfen?",
+    "bonjour": "Bonjour ! Je suis Yinetsu AI. Comment puis-je vous aider ?",
+    "salut": "Salut ! Je suis Yinetsu AI. Comment puis-je vous aider ?",
+    "ciao": "Ciao! Sono Yinetsu AI. Come posso aiutarti?",
+};
+
+// ═══ QUICK COMMANDS (Lifetime cache, pattern-based) ═══
+// Format: { pattern: regex, template: string }
+// {0}, {1}, {2}... = captured groups
+const LOCAL_QUICK_COMMANDS = [
+    // Fly
+    { pattern: /^(?:fly|flight|lipad|patag)\s*(?:on|enable|activate)?$/i, template: "[ACTION:fly:on]\n✅ Fly: ON" },
+    { pattern: /^(?:fly|flight|lipad|patag)\s*(?:off|disable|deactivate|stop)$/i, template: "[ACTION:fly:off]\n✅ Fly: OFF" },
+
+    // Noclip
+    { pattern: /^(?:noclip|no\s*clip|ghost\s*mode)\s*(?:on|enable)?$/i, template: "[ACTION:noclip:on]\n✅ Noclip: ON" },
+    { pattern: /^(?:noclip|no\s*clip|ghost\s*mode)\s*(?:off|disable)$/i, template: "[ACTION:noclip:off]\n✅ Noclip: OFF" },
+
+    // Fullbright
+    { pattern: /^(?:fullbright|full\s*bright|bright(?:ness)?)\s*(?:on|enable)?$/i, template: "[ACTION:fullbright:on]\n✅ Fullbright: ON" },
+    { pattern: /^(?:fullbright|full\s*bright)\s*(?:off|disable)$/i, template: "[ACTION:fullbright:off]\n✅ Fullbright: OFF" },
+
+    // Anti-Fling
+    { pattern: /^anti[-\s]*fling\s*(?:on|enable)?$/i, template: "[ACTION:anti_fling:on]\n✅ Anti-Fling: ON" },
+    { pattern: /^anti[-\s]*fling\s*(?:off|disable)$/i, template: "[ACTION:anti_fling:off]\n✅ Anti-Fling: OFF" },
+
+    // Rejoin Death
+    { pattern: /^rejoin\s*(?:on\s*)?death\s*(?:on|enable)?$/i, template: "[ACTION:rejoin_death:on]\n✅ Rejoin Death: ON" },
+    { pattern: /^rejoin\s*(?:on\s*)?death\s*(?:off|disable)$/i, template: "[ACTION:rejoin_death:off]\n✅ Rejoin Death: OFF" },
+
+    // Auto-Clicker
+    { pattern: /^auto[-\s]*click(?:er)?\s*(?:on|enable)?$/i, template: "[ACTION:auto_clicker:on]\n✅ Auto-Clicker: ON" },
+    { pattern: /^auto[-\s]*click(?:er)?\s*(?:off|disable)$/i, template: "[ACTION:auto_clicker:off]\n✅ Auto-Clicker: OFF" },
+
+    // Negate Args
+    { pattern: /^(?:negate(?:\s*args)?|neg)\s*(?:on|enable)?$/i, template: "[ACTION:negate_args:on]\n✅ Negate: ON" },
+    { pattern: /^(?:negate(?:\s*args)?|neg)\s*(?:off|disable)$/i, template: "[ACTION:negate_args:off]\n✅ Negate: OFF" },
+
+    // Multiply Args
+    { pattern: /^(?:multiply|mul|x9999)\s*(?:on|enable)?$/i, template: "[ACTION:multiply_args:on]\n✅ Multiply: ON" },
+    { pattern: /^(?:multiply|mul|x9999)\s*(?:off|disable)$/i, template: "[ACTION:multiply_args:off]\n✅ Multiply: OFF" },
+
+    // Server / Rejoin
+    { pattern: /^(?:server\s*hop|hop\s*server|lipat\s*server|change\s*server)$/i, template: "[ACTION:server_hop_smart]\n🔄 Server hopping..." },
+    { pattern: /^(?:rejoin(?:\s*server)?|balik\s*server)$/i, template: "[ACTION:rejoin_current]\n🔄 Rejoining server..." },
+
+    // Copy
+    { pattern: /^copy\s*job\s*id$/i, template: "[ACTION:copy_jobid]\n📋 JobId copied" },
+    { pattern: /^copy\s*(?:game\s*)?link$/i, template: "[ACTION:copy_game_link]\n🔗 Link copied" },
+    { pattern: /^copy\s*place\s*id$/i, template: "[ACTION:copy_place_id]\n📋 Place ID copied" },
+
+    // Save / Load Position
+    { pattern: /^save\s*(?:my\s*)?pos(?:ition)?$/i, template: "[ACTION:save_position]\n✅ Position saved" },
+    { pattern: /^load\s*(?:my\s*)?pos(?:ition)?$/i, template: "[ACTION:load_position]\n✅ Teleported back" },
+
+    // Recording
+    { pattern: /^(?:start\s*)?rec(?:ording)?$/i, template: "[ACTION:start_recording]\n⏺ Recording started" },
+    { pattern: /^stop\s*rec(?:ording)?$/i, template: "[ACTION:stop_recording]\n⏹ Recording stopped" },
+
+    // Sequence
+    { pattern: /^play\s*seq(?:uence)?$/i, template: "[ACTION:play_sequence]\n▶ Playing sequence" },
+    { pattern: /^stop\s*seq(?:uence)?$/i, template: "[ACTION:stop_sequence]\n⏹ Sequence stopped" },
+
+    // Music
+    { pattern: /^(?:play\s*music|music\s*play)$/i, template: "[ACTION:play_music]\n▶ Music playing" },
+    { pattern: /^(?:pause\s*music|music\s*pause)$/i, template: "[ACTION:pause_music]\n⏸ Music paused" },
+    { pattern: /^(?:stop\s*music|music\s*stop)$/i, template: "[ACTION:stop_music]\n⏹ Music stopped" },
+    { pattern: /^next\s*(?:track|song)$/i, template: "[ACTION:next_track]\n⏭ Next track" },
+    { pattern: /^(?:prev(?:ious)?\s*(?:track|song))$/i, template: "[ACTION:prev_track]\n⏮ Previous track" },
+
+    // Speed (with number)
+    { pattern: /^(?:set\s*)?(?:speed|walkspeed|bilis)\s*(?:to\s*)?(\d+)$/i, template: "[ACTION:set_speed:{0}]\n✅ Speed: {0}" },
+
+    // Jump (with number)
+    { pattern: /^(?:set\s*)?(?:jump|jumppower|jump\s*power|talon)\s*(?:to\s*)?(\d+)$/i, template: "[ACTION:set_jump:{0}]\n✅ Jump: {0}" },
+
+    // Teleport to player
+    { pattern: /^tp\s*(?:to\s*)?(.+)$/i, template: "[ACTION:teleport_to:{0}]\n✅ Teleporting..." },
+    { pattern: /^teleport\s*(?:to\s*)?(.+)$/i, template: "[ACTION:teleport_to:{0}]\n✅ Teleporting..." },
+
+    // FPS Boost
+    { pattern: /^(?:enable\s*)?fps\s*(?:boost|booster)$/i, template: "[ACTION:enable_fps_boost]\n🚀 FPS Boost: ON" },
+    { pattern: /^disable\s*fps\s*(?:boost|booster)$/i, template: "[ACTION:disable_fps_boost]\nFPS Boost: OFF" },
+
+    // Help
+    { pattern: /^help$/i, template: "📖 I can help with: fly, noclip, fullbright, speed, jump, teleport, server hop, rejoin, music controls, and more! Just ask naturally in any language." },
+
+    // Game Info
+    { pattern: /^(?:game\s*info|what\s*game|anong\s*game(?:\s*to)?)$/i, template: "[ACTION:game_info]\n🎮 Getting game info..." },
+];
+
+// ═══ Helper: Apply template with captured groups ═══
+function applyTemplate(template, match) {
+    let result = template;
+    for (let i = 1; i < match.length; i++) {
+        result = result.split(`{${i - 1}}`).join(match[i] || '');
+    }
+    return result;
+}
+
+// ═══ Helper: Check local response ═══
+function checkLocalResponse(message, hasHistory) {
+    // Clean message (strip trailing punctuation)
+    const clean = message.trim().toLowerCase().replace(/[!?.,;:]+$/, '');
+
+    // 1. Greetings — only when no history (first message)
+    if (!hasHistory && LOCAL_GREETINGS[clean]) {
+        return {
+            reply: LOCAL_GREETINGS[clean],
+            provider: 'local',
+            model: 'greeting',
+            cached: true,
+            local: true
+        };
+    }
+
+    // 2. Quick commands — always (standalone)
+    for (const cmd of LOCAL_QUICK_COMMANDS) {
+        const match = message.trim().match(cmd.pattern);
+        if (match) {
+            return {
+                reply: applyTemplate(cmd.template, match),
+                provider: 'local',
+                model: 'quick-command',
+                cached: true,
+                local: true
+            };
+        }
+    }
+
+    return null;
+}
+
+// ═══ CACHING (chat, 5 min TTL) ═══
 const CACHE = new Map();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
-// ═══ GROQ MODELS ═══
-const GROQ_MODELS = [
-    'qwen/qwen3.8-27b',
-    'openai/gpt-oss-120b',
-    'openai/gpt-oss-20b',
-];
-
-// ═══ GEMINI MODELS ═══
-const GEMINI_MODELS = [
-    'gemini-3.5-flash-lite',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-];
-
-// ═══ OPENROUTER MODELS ═══
-const OPENROUTER_MODELS = [
-    'meta-llama/llama-3.3-70b-instruct:free',
-    'meta-llama/llama-3.1-8b-instruct:free',
-    'google/gemma-4-31b:free',
-    'nvidia/nemotron-3-super:free',
-    'nvidia/nemotron-3.5-lightning:free',
-];
-
-// ═══ POLLINATIONS MODELS ═══
-const POLLINATIONS_MODELS = [
-    'openai-fast',
-];
-
-// ═══════════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════════
-
-// Fetch with timeout (AbortController)
-async function fetchWithTimeout(url, options, timeoutMs) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
-        return response;
-    } finally {
-        clearTimeout(timer);
-    }
-}
-
-// Normalize error messages (handles different error formats)
-function extractError(data, rawText) {
-    if (!data) return rawText?.substring(0, 100) || 'Unknown error';
-    if (typeof data === 'string') return data.substring(0, 100);
-    if (data.error) {
-        if (typeof data.error === 'string') return data.error.substring(0, 100);
-        if (data.error.message) return String(data.error.message).substring(0, 100);
-        if (typeof data.error === 'object') return JSON.stringify(data.error).substring(0, 100);
-    }
-    if (data.detail) return String(data.detail).substring(0, 100);
-    if (data.message) return String(data.message).substring(0, 100);
-    return rawText?.substring(0, 100) || 'Unknown error';
-}
-
-// Check if error is rate limit (para hindi na mag-retry)
-function isRateLimit(status, data, rawText) {
-    if (status === 429) return true;
-    const text = (rawText || '').toLowerCase();
-    if (text.includes('rate limit') || text.includes('rate_limit')) return true;
-    if (text.includes('quota') || text.includes('too many requests')) return true;
-    return false;
-}
-
-// Cache helpers
 function makeCacheKey(messages) {
-    // Simple hash from messages
     const userMsg = messages.filter(m => m.role === 'user').map(m => m.content).join('|');
     const sysMsg = messages.filter(m => m.role === 'system').map(m => m.content).join('|');
     return `${userMsg.length}_${sysMsg.length}_${userMsg.substring(0, 200)}`;
@@ -103,7 +221,6 @@ function getCached(key) {
 
 function setCache(key, response) {
     CACHE.set(key, { response, time: Date.now() });
-    // Cleanup old entries (max 500)
     if (CACHE.size > 500) {
         const now = Date.now();
         for (const [k, v] of CACHE.entries()) {
@@ -111,6 +228,62 @@ function setCache(key, response) {
         }
     }
 }
+
+// ═══ FETCH WITH TIMEOUT ═══
+async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// ═══ NORMALIZE ERROR ═══
+function extractError(data, rawText) {
+    if (!data) return rawText?.substring(0, 100) || 'Unknown error';
+    if (typeof data === 'string') return data.substring(0, 100);
+    if (data.error) {
+        if (typeof data.error === 'string') return data.error.substring(0, 100);
+        if (data.error.message) return String(data.error.message).substring(0, 100);
+        if (typeof data.error === 'object') return JSON.stringify(data.error).substring(0, 100);
+    }
+    if (data.detail) return String(data.detail).substring(0, 100);
+    if (data.message) return String(data.message).substring(0, 100);
+    return rawText?.substring(0, 100) || 'Unknown error';
+}
+
+function isRateLimit(status, data, rawText) {
+    if (status === 429) return true;
+    const text = (rawText || '').toLowerCase();
+    if (text.includes('rate limit') || text.includes('rate_limit')) return true;
+    if (text.includes('quota') || text.includes('too many requests')) return true;
+    return false;
+}
+
+// ═══ MODELS ═══
+const GROQ_MODELS = [
+    'qwen/qwen3.8-27b',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
+];
+
+const GEMINI_MODELS = [
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+];
+
+const OPENROUTER_MODELS = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'meta-llama/llama-3.1-8b-instruct:free',
+    'google/gemma-4-31b:free',
+    'nvidia/nemotron-3-super:free',
+    'nvidia/nemotron-3.5-lightning:free',
+];
+
+const POLLINATIONS_MODELS = ['openai-fast'];
 
 // ═══════════════════════════════════════════════════════════════
 // MAIN HANDLER
@@ -139,14 +312,6 @@ CRITICAL RULES:
 3. You have CONVERSATION MEMORY — remember previous messages.
 4. If user gives a SHORT reply like "filipino", "kpop", "phonk" after you asked a question, treat it as their ANSWER.
 
-CONTEXT AWARENESS:
-- Continue the conversation naturally — remember what was discussed.
-- Example:
-  User: "hanap mo music"
-  AI: "Anong klaseng songs hanap mo?"
-  User: "filipino"
-  AI: [ACTION:search_music:filipino] "Sige, Filipino songs!"
-
 ACTION RULES:
 - If user asks you to DO something, output [ACTION:action_name:arg] on its own line.
 - After the action tag, write a SHORT confirmation in the user's language.
@@ -164,6 +329,14 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
+    // ═══ CHECK LOCAL RESPONSE FIRST (ZERO RPD) ═══
+    const localResponse = checkLocalResponse(message, history.length > 0);
+    if (localResponse) {
+        console.log(`[Yinetsu] ⚡ LOCAL: ${localResponse.model}`);
+        return res.status(200).json(localResponse);
+    }
+
+    // ═══ BUILD MESSAGES ═══
     const messages = [{ role: 'system', content: systemPrompt }];
     for (const item of history) {
         if (item && item.role && item.content) {
@@ -175,23 +348,17 @@ ACTION RULES:
     }
     messages.push({ role: 'user', content: message });
 
-    // ═══ CHECK CACHE FIRST ═══
+    // ═══ CHECK CACHE ═══
     const cacheKey = makeCacheKey(messages);
     const cached = getCached(cacheKey);
     if (cached) {
         console.log(`[Yinetsu] ⚡ CACHE HIT`);
-        return res.status(200).json({
-            ...cached,
-            provider: cached.provider + '-cached',
-            cached: true
-        });
+        return res.status(200).json({ ...cached, provider: cached.provider + '-cached', cached: true });
     }
 
     const debugLog = [];
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 1: GROQ ═══
     if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
@@ -201,36 +368,19 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: messages,
-                        temperature: 0.6,
-                        max_tokens: 1024
-                    })
+                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
                 let data = null;
                 try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (isRateLimit(response.status, data, rawText)) {
-                    debugLog.push(`Groq/${model}: rate limited`);
-                    continue;
-                }
-                if (data && data.error) {
-                    debugLog.push(`Groq/${model}: ${extractError(data, rawText)}`);
-                    continue;
-                }
-                if (response.status !== 200) {
-                    debugLog.push(`Groq/${model}: HTTP ${response.status}`);
-                    continue;
-                }
+                if (isRateLimit(response.status, data, rawText)) { debugLog.push(`Groq/${model}: rate limited`); continue; }
+                if (data && data.error) { debugLog.push(`Groq/${model}: ${extractError(data, rawText)}`); continue; }
+                if (response.status !== 200) { debugLog.push(`Groq/${model}: HTTP ${response.status}`); continue; }
 
                 const reply = data?.choices?.[0]?.message?.content;
-                if (!reply) {
-                    debugLog.push(`Groq/${model}: empty`);
-                    continue;
-                }
+                if (!reply) { debugLog.push(`Groq/${model}: empty`); continue; }
 
                 const result = { reply, provider: 'groq', model, usage: data.usage || null };
                 setCache(cacheKey, result);
@@ -246,30 +396,17 @@ ACTION RULES:
         debugLog.push('Groq: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 2: GEMINI
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 2: GEMINI ═══
     if (process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
                 const geminiContents = [];
                 let systemInstruction = null;
-
                 for (const msg of messages) {
-                    if (msg.role === 'system') {
-                        systemInstruction = { parts: [{ text: msg.content }] };
-                    } else {
-                        geminiContents.push({
-                            role: msg.role === 'user' ? 'user' : 'model',
-                            parts: [{ text: msg.content }]
-                        });
-                    }
+                    if (msg.role === 'system') systemInstruction = { parts: [{ text: msg.content }] };
+                    else geminiContents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
                 }
-
-                const geminiBody = {
-                    contents: geminiContents,
-                    generationConfig: { temperature: 0.6, maxOutputTokens: 1024 }
-                };
+                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.6, maxOutputTokens: 1024 } };
                 if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
@@ -283,24 +420,12 @@ ACTION RULES:
                 let data = null;
                 try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (isRateLimit(response.status, data, rawText)) {
-                    debugLog.push(`Gemini/${model}: rate limited`);
-                    continue;
-                }
-                if (data && data.error) {
-                    debugLog.push(`Gemini/${model}: ${extractError(data, rawText)}`);
-                    continue;
-                }
-                if (response.status !== 200) {
-                    debugLog.push(`Gemini/${model}: HTTP ${response.status}`);
-                    continue;
-                }
+                if (isRateLimit(response.status, data, rawText)) { debugLog.push(`Gemini/${model}: rate limited`); continue; }
+                if (data && data.error) { debugLog.push(`Gemini/${model}: ${extractError(data, rawText)}`); continue; }
+                if (response.status !== 200) { debugLog.push(`Gemini/${model}: HTTP ${response.status}`); continue; }
 
                 const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!reply) {
-                    debugLog.push(`Gemini/${model}: empty`);
-                    continue;
-                }
+                if (!reply) { debugLog.push(`Gemini/${model}: empty`); continue; }
 
                 const result = { reply, provider: 'gemini', model, usage: data.usageMetadata || null };
                 setCache(cacheKey, result);
@@ -316,9 +441,7 @@ ACTION RULES:
         debugLog.push('Gemini: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 3: OPENROUTER
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 3: OPENROUTER ═══
     if (process.env.OPENROUTER_API_KEY) {
         for (const model of OPENROUTER_MODELS) {
             try {
@@ -330,36 +453,19 @@ ACTION RULES:
                         'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
                         'X-Title': 'Yinetsu AI'
                     },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: messages,
-                        temperature: 0.6,
-                        max_tokens: 1024
-                    })
+                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
                 let data = null;
                 try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (isRateLimit(response.status, data, rawText)) {
-                    debugLog.push(`OpenRouter/${model}: rate limited`);
-                    continue;
-                }
-                if (data && data.error) {
-                    debugLog.push(`OpenRouter/${model}: ${extractError(data, rawText)}`);
-                    continue;
-                }
-                if (response.status !== 200) {
-                    debugLog.push(`OpenRouter/${model}: HTTP ${response.status}`);
-                    continue;
-                }
+                if (isRateLimit(response.status, data, rawText)) { debugLog.push(`OpenRouter/${model}: rate limited`); continue; }
+                if (data && data.error) { debugLog.push(`OpenRouter/${model}: ${extractError(data, rawText)}`); continue; }
+                if (response.status !== 200) { debugLog.push(`OpenRouter/${model}: HTTP ${response.status}`); continue; }
 
                 const reply = data?.choices?.[0]?.message?.content;
-                if (!reply) {
-                    debugLog.push(`OpenRouter/${model}: empty`);
-                    continue;
-                }
+                if (!reply) { debugLog.push(`OpenRouter/${model}: empty`); continue; }
 
                 const result = { reply, provider: 'openrouter', model, usage: data.usage || null };
                 setCache(cacheKey, result);
@@ -375,9 +481,7 @@ ACTION RULES:
         debugLog.push('OpenRouter: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 4: POLLINATIONS (last backup)
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ PROVIDER 4: POLLINATIONS ═══
     if (process.env.POLLINATIONS_API_KEY) {
         for (const model of POLLINATIONS_MODELS) {
             try {
@@ -387,40 +491,20 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.POLLINATIONS_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: messages,
-                        temperature: 0.6,
-                        max_tokens: 1024
-                    })
+                    body: JSON.stringify({ model, messages, temperature: 0.6, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
                 let data = null;
                 try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (isRateLimit(response.status, data, rawText)) {
-                    debugLog.push(`Pollinations/${model}: rate limited`);
-                    continue;
-                }
-                if (response.status === 402) {
-                    debugLog.push(`Pollinations/${model}: no pollen budget`);
-                    continue;
-                }
-                if (data && data.error) {
-                    debugLog.push(`Pollinations/${model}: ${extractError(data, rawText)}`);
-                    continue;
-                }
-                if (response.status !== 200) {
-                    debugLog.push(`Pollinations/${model}: HTTP ${response.status}`);
-                    continue;
-                }
+                if (isRateLimit(response.status, data, rawText)) { debugLog.push(`Pollinations/${model}: rate limited`); continue; }
+                if (response.status === 402) { debugLog.push(`Pollinations/${model}: no pollen`); continue; }
+                if (data && data.error) { debugLog.push(`Pollinations/${model}: ${extractError(data, rawText)}`); continue; }
+                if (response.status !== 200) { debugLog.push(`Pollinations/${model}: HTTP ${response.status}`); continue; }
 
                 const reply = data?.choices?.[0]?.message?.content;
-                if (!reply) {
-                    debugLog.push(`Pollinations/${model}: empty`);
-                    continue;
-                }
+                if (!reply) { debugLog.push(`Pollinations/${model}: empty`); continue; }
 
                 const result = { reply, provider: 'pollinations', model, usage: data.usage || null };
                 setCache(cacheKey, result);
@@ -436,9 +520,7 @@ ACTION RULES:
         debugLog.push('Pollinations: API key missing');
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ALL PROVIDERS EXHAUSTED
-    // ═══════════════════════════════════════════════════════════════
+    // ═══ ALL FAILED ═══
     console.log('[Yinetsu] ❌ All providers failed:', debugLog.join(' | '));
 
     return res.status(503).json({
