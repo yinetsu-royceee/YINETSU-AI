@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU FETCH-SCRIPT — Optimized (Oct 2026)
-// Features: 3-Week Caching · Timeout · Error Handling
+// YINETSU FETCH-SCRIPT — Optimized (Oct 2026 FINAL)
+// Features: 3-Week Caching · Timeout · Known Safe Whitelist
 // ═══════════════════════════════════════════════════════════════
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -8,6 +8,18 @@ const FETCH_TIMEOUT_MS = 8000;
 // ═══ CACHING (3 weeks TTL, by URL) ═══
 const SCRIPT_CACHE = new Map();
 const CACHE_TTL_MS = 3 * 7 * 24 * 60 * 60 * 1000; // 21 days
+
+// ═══ KNOWN SAFE SCRIPTS (whitelist para sa safety boost) ═══
+const KNOWN_SAFE_SCRIPTS = [
+    "infiniteyield",
+    "edgeiy/infiniteyield",
+    "rayfield",
+    "orion-library",
+    "kavo-ui-library",
+    "wally",
+    "synapse",
+    "krnl",
+];
 
 function getCachedScript(url) {
     const entry = SCRIPT_CACHE.get(url);
@@ -21,7 +33,6 @@ function getCachedScript(url) {
 
 function setCachedScript(url, data) {
     SCRIPT_CACHE.set(url, { data, time: Date.now() });
-    // Cleanup if too many entries
     if (SCRIPT_CACHE.size > 500) {
         const now = Date.now();
         for (const [k, v] of SCRIPT_CACHE.entries()) {
@@ -55,7 +66,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "No URL provided" });
     }
 
-    // ═══ CHECK CACHE FIRST (ZERO FETCH) ═══
+    // ═══ CHECK CACHE FIRST ═══
     const cached = getCachedScript(url);
     if (cached) {
         console.log(`[Yinetsu Fetch] ⚡ CACHE HIT: ${url.substring(0, 60)}`);
@@ -133,7 +144,7 @@ export default async function handler(req, res) {
     }
 }
 
-// ═══ SAFETY ANALYSIS (same as before) ═══
+// ═══ SAFETY ANALYSIS ═══
 function analyzeCode(code, host) {
     const lower = code.toLowerCase();
     const flags = [];
@@ -170,6 +181,15 @@ function analyzeCode(code, host) {
     if (code.includes('--') && code.length < 3000) { flags.push("✅ Readable code with comments"); score += 2; }
     if (lower.includes('made by') || lower.includes('author') || lower.includes('-- [')) {
         flags.push("✅ Has author signature"); score += 1;
+    }
+
+    // ═══ KNOWN SAFE SCRIPTS BOOST ═══
+    const isKnownSafe = KNOWN_SAFE_SCRIPTS.some(name =>
+        code.toLowerCase().includes(name) || host.toLowerCase().includes(name)
+    );
+    if (isKnownSafe) {
+        flags.push("✅ Known safe script");
+        score += 5; // Boost to SAFE
     }
 
     // Determine level
