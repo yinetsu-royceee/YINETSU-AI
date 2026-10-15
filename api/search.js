@@ -62,53 +62,91 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — ROBLOX GAMES SEARCH V2 API (FIXED)
+// GAME SEARCH — ORIGINAL + FANMADE COMBINED
 // ============================================
 async function searchGame(query, res) {
+    const results = [];
+    const seenIds = new Set();
+
+    // 1. Kunin muna ang mga opisyal/catalog games (Dito kasama ang Original Game)
     try {
-        const url = 'https://games.roblox.com/v1/games/search?keyword=' + encodeURIComponent(query) + '&maxRows=15';
-        const response = await fetch(url, {
+        const catalogUrl = 'https://catalog.roblox.com/v1/search/items/details?Category=12&Keyword=' + encodeURIComponent(query) + '&Limit=10&SortType=Relevance';
+        const response = await fetch(catalogUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
-        
-        if (!response.ok) {
-            return res.status(200).json({ query: query, type: "game", count: 0, results: [] });
-        }
 
-        const data = await response.json();
-        const results = [];
-
-        const gamesList = data.games || data.data || [];
-        if (Array.isArray(gamesList)) {
-            for (let i = 0; i < gamesList.length; i++) {
-                const game = gamesList[i];
-                const placeId = game.rootPlaceId || game.placeId || game.id;
-                if (placeId) {
-                    results.push({
-                        id: String(placeId),
-                        placeId: String(placeId),
-                        name: game.name || game.title || "Untitled Game",
-                        creator: game.creatorName || game.builder || "Unknown",
-                        playing: game.playerCount || game.playing || game.activePlayers || 0,
-                        url: "https://www.roblox.com/games/" + placeId,
-                        snippet: "Creator: " + (game.creatorName || "Unknown") + " · Active: " + (game.playerCount || 0)
-                    });
+        if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data.data)) {
+                for (const item of data.data) {
+                    const placeId = item.targetId || item.id;
+                    if (placeId && !seenIds.has(String(placeId))) {
+                        seenIds.add(String(placeId));
+                        results.push({
+                            id: String(placeId),
+                            placeId: String(placeId),
+                            name: item.name || "Roblox Game",
+                            creator: item.creatorName || "Unknown",
+                            playing: item.playing || item.viewCount || 50000, // Bigyan ng mataas na priority para mauna ang orig
+                            url: "https://www.roblox.com/games/" + placeId,
+                            snippet: "Creator: " + (item.creatorName || "Unknown")
+                        });
+                    }
                 }
             }
         }
+    } catch (e) { /* ignore */ }
 
-        // I-sort para unahin ang original na may pinakamataas na player count
-        results.sort((a, b) => b.playing - a.playing);
+    // 2. Isama rin ang web search / Tavily para makuha ang iba pa (Kasamang fanmade)
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    try {
+        if (tavilyKey && tavilyKey.length > 10) {
+            const r1 = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tavilyKey },
+                body: JSON.stringify({
+                    query: query + " roblox game site:roblox.com/games",
+                    search_depth: "advanced",
+                    max_results: 10
+                })
+            });
+            if (r1.ok) {
+                const d1 = await r1.json();
+                if (Array.isArray(d1.results)) {
+                    for (const r of d1.results) {
+                        const matches = (r.url || "").match(/roblox\.com\/games\/(\d{6,})/g) || [];
+                        for (const m of matches) {
+                            const idMatch = m.match(/(\d{6,})/);
+                            if (idMatch) {
+                                const pid = idMatch[1];
+                                if (!seenIds.has(pid)) {
+                                    seenIds.add(pid);
+                                    results.push({
+                                        id: pid,
+                                        placeId: pid,
+                                        name: (r.title || "Roblox Game").replace(/\s*[|\-–].*$/, "").trim(),
+                                        creator: "From web",
+                                        playing: 100, // Fanmade/iba pa
+                                        url: "https://www.roblox.com/games/" + pid,
+                                        snippet: (r.content || "").slice(0, 120)
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) { /* ignore */ }
 
-        return res.status(200).json({ 
-            query: query, 
-            type: "game", 
-            count: results.length, 
-            results: results.slice(0, 10) 
-        });
-    } catch (err) {
-        return res.status(200).json({ query: query, type: "game", count: 0, results: [], error: String(err && err.message ? err.message : err) });
-    }
+    // I-sort para laging unahin ang Original Game sa tuktok, pero nandon pa rin ang iba sa baba
+    results.sort((a, b) => b.playing - a.playing);
+
+    return res.status(200).json({
+        query: query, type: "game",
+        count: results.length,
+        results: results.slice(0, 12)
+    });
 }
 
 // ============================================
@@ -137,7 +175,7 @@ async function searchUser(query, res) {
         }
         return res.status(200).json({ query, type: "user", count: 0, results: [] });
     } catch (err) {
-        return res.status(200).json({ query: query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
+        return res.status(200).json({ query, type: "user", count: 0, results: [], error: String(err && err.message ? err.message : err) });
     }
 }
 
