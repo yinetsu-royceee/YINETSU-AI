@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback (Oct 2026 FINAL)
-// Priority: Groq → Gemini → OpenRouter → Pollinations
+// YINETSU AI — Multi-Provider Fallback + Optimization (Oct 2026)
+// Features: Caching · Timeout · Error Handling · Smart Retry
+// NO RATE LIMIT — all users have equal access
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -8,11 +9,18 @@ const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const POLLINATIONS_ENDPOINT = 'https://text.pollinations.ai/openai/chat/completions';
 
+// ═══ PROVIDER TIMEOUT (8 seconds per provider) ═══
+const PROVIDER_TIMEOUT_MS = 8000;
+
+// ═══ CACHING (in-memory, 5 minutes TTL) ═══
+const CACHE = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 // ═══ GROQ MODELS ═══
 const GROQ_MODELS = [
-    'qwen/qwen3.8-27b',         // ~1,000 RPD, 2M TPD ⭐
-    'openai/gpt-oss-120b',      // ~1,000 RPD
-    'openai/gpt-oss-20b',       // ~1,000 RPD
+    'qwen/qwen3.8-27b',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
 ];
 
 // ═══ GEMINI MODELS ═══
@@ -33,8 +41,80 @@ const OPENROUTER_MODELS = [
 
 // ═══ POLLINATIONS MODELS ═══
 const POLLINATIONS_MODELS = [
-    'openai-fast',              // GPT-OSS 20B (default free)
+    'openai-fast',
 ];
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+// Fetch with timeout (AbortController)
+async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// Normalize error messages (handles different error formats)
+function extractError(data, rawText) {
+    if (!data) return rawText?.substring(0, 100) || 'Unknown error';
+    if (typeof data === 'string') return data.substring(0, 100);
+    if (data.error) {
+        if (typeof data.error === 'string') return data.error.substring(0, 100);
+        if (data.error.message) return String(data.error.message).substring(0, 100);
+        if (typeof data.error === 'object') return JSON.stringify(data.error).substring(0, 100);
+    }
+    if (data.detail) return String(data.detail).substring(0, 100);
+    if (data.message) return String(data.message).substring(0, 100);
+    return rawText?.substring(0, 100) || 'Unknown error';
+}
+
+// Check if error is rate limit (para hindi na mag-retry)
+function isRateLimit(status, data, rawText) {
+    if (status === 429) return true;
+    const text = (rawText || '').toLowerCase();
+    if (text.includes('rate limit') || text.includes('rate_limit')) return true;
+    if (text.includes('quota') || text.includes('too many requests')) return true;
+    return false;
+}
+
+// Cache helpers
+function makeCacheKey(messages) {
+    // Simple hash from messages
+    const userMsg = messages.filter(m => m.role === 'user').map(m => m.content).join('|');
+    const sysMsg = messages.filter(m => m.role === 'system').map(m => m.content).join('|');
+    return `${userMsg.length}_${sysMsg.length}_${userMsg.substring(0, 200)}`;
+}
+
+function getCached(key) {
+    const entry = CACHE.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.time > CACHE_TTL_MS) {
+        CACHE.delete(key);
+        return null;
+    }
+    return entry.response;
+}
+
+function setCache(key, response) {
+    CACHE.set(key, { response, time: Date.now() });
+    // Cleanup old entries (max 500)
+    if (CACHE.size > 500) {
+        const now = Date.now();
+        for (const [k, v] of CACHE.entries()) {
+            if (now - v.time > CACHE_TTL_MS) CACHE.delete(k);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN HANDLER
+// ═══════════════════════════════════════════════════════════════
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -95,6 +175,18 @@ ACTION RULES:
     }
     messages.push({ role: 'user', content: message });
 
+    // ═══ CHECK CACHE FIRST ═══
+    const cacheKey = makeCacheKey(messages);
+    const cached = getCached(cacheKey);
+    if (cached) {
+        console.log(`[Yinetsu] ⚡ CACHE HIT`);
+        return res.status(200).json({
+            ...cached,
+            provider: cached.provider + '-cached',
+            cached: true
+        });
+    }
+
     const debugLog = [];
 
     // ═══════════════════════════════════════════════════════════════
@@ -103,7 +195,7 @@ ACTION RULES:
     if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
-                const response = await fetch(GROQ_ENDPOINT, {
+                const response = await fetchWithTimeout(GROQ_ENDPOINT, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -115,28 +207,38 @@ ACTION RULES:
                         temperature: 0.6,
                         max_tokens: 1024
                     })
-                });
+                }, PROVIDER_TIMEOUT_MS);
 
-                const data = await response.json();
+                const rawText = await response.text();
+                let data = null;
+                try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (response.status === 429) {
+                if (isRateLimit(response.status, data, rawText)) {
                     debugLog.push(`Groq/${model}: rate limited`);
                     continue;
                 }
-                if (data.error) {
-                    debugLog.push(`Groq/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                if (data && data.error) {
+                    debugLog.push(`Groq/${model}: ${extractError(data, rawText)}`);
                     continue;
                 }
-                const reply = data.choices?.[0]?.message?.content;
+                if (response.status !== 200) {
+                    debugLog.push(`Groq/${model}: HTTP ${response.status}`);
+                    continue;
+                }
+
+                const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) {
                     debugLog.push(`Groq/${model}: empty`);
                     continue;
                 }
 
+                const result = { reply, provider: 'groq', model, usage: data.usage || null };
+                setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Groq/${model}`);
-                return res.status(200).json({ reply, provider: 'groq', model, usage: data.usage || null });
+                return res.status(200).json(result);
             } catch (err) {
-                debugLog.push(`Groq/${model}: ${(err.message || '').substring(0, 60)}`);
+                const msg = err.name === 'AbortError' ? 'timeout' : (err.message || 'error');
+                debugLog.push(`Groq/${model}: ${msg.substring(0, 60)}`);
                 continue;
             }
         }
@@ -171,32 +273,42 @@ ACTION RULES:
                 if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-                const response = await fetch(url, {
+                const response = await fetchWithTimeout(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(geminiBody)
-                });
+                }, PROVIDER_TIMEOUT_MS);
 
-                const data = await response.json();
+                const rawText = await response.text();
+                let data = null;
+                try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (response.status === 429) {
+                if (isRateLimit(response.status, data, rawText)) {
                     debugLog.push(`Gemini/${model}: rate limited`);
                     continue;
                 }
-                if (data.error) {
-                    debugLog.push(`Gemini/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                if (data && data.error) {
+                    debugLog.push(`Gemini/${model}: ${extractError(data, rawText)}`);
                     continue;
                 }
-                const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (response.status !== 200) {
+                    debugLog.push(`Gemini/${model}: HTTP ${response.status}`);
+                    continue;
+                }
+
+                const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (!reply) {
                     debugLog.push(`Gemini/${model}: empty`);
                     continue;
                 }
 
+                const result = { reply, provider: 'gemini', model, usage: data.usageMetadata || null };
+                setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Gemini/${model}`);
-                return res.status(200).json({ reply, provider: 'gemini', model, usage: data.usageMetadata || null });
+                return res.status(200).json(result);
             } catch (err) {
-                debugLog.push(`Gemini/${model}: ${(err.message || '').substring(0, 60)}`);
+                const msg = err.name === 'AbortError' ? 'timeout' : (err.message || 'error');
+                debugLog.push(`Gemini/${model}: ${msg.substring(0, 60)}`);
                 continue;
             }
         }
@@ -210,7 +322,7 @@ ACTION RULES:
     if (process.env.OPENROUTER_API_KEY) {
         for (const model of OPENROUTER_MODELS) {
             try {
-                const response = await fetch(OPENROUTER_ENDPOINT, {
+                const response = await fetchWithTimeout(OPENROUTER_ENDPOINT, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
@@ -224,28 +336,38 @@ ACTION RULES:
                         temperature: 0.6,
                         max_tokens: 1024
                     })
-                });
+                }, PROVIDER_TIMEOUT_MS);
 
-                const data = await response.json();
+                const rawText = await response.text();
+                let data = null;
+                try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (response.status === 429) {
+                if (isRateLimit(response.status, data, rawText)) {
                     debugLog.push(`OpenRouter/${model}: rate limited`);
                     continue;
                 }
-                if (data.error) {
-                    debugLog.push(`OpenRouter/${model}: ${(data.error.message || '').substring(0, 60)}`);
+                if (data && data.error) {
+                    debugLog.push(`OpenRouter/${model}: ${extractError(data, rawText)}`);
                     continue;
                 }
-                const reply = data.choices?.[0]?.message?.content;
+                if (response.status !== 200) {
+                    debugLog.push(`OpenRouter/${model}: HTTP ${response.status}`);
+                    continue;
+                }
+
+                const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) {
                     debugLog.push(`OpenRouter/${model}: empty`);
                     continue;
                 }
 
+                const result = { reply, provider: 'openrouter', model, usage: data.usage || null };
+                setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ OpenRouter/${model}`);
-                return res.status(200).json({ reply, provider: 'openrouter', model, usage: data.usage || null });
+                return res.status(200).json(result);
             } catch (err) {
-                debugLog.push(`OpenRouter/${model}: ${(err.message || '').substring(0, 60)}`);
+                const msg = err.name === 'AbortError' ? 'timeout' : (err.message || 'error');
+                debugLog.push(`OpenRouter/${model}: ${msg.substring(0, 60)}`);
                 continue;
             }
         }
@@ -259,7 +381,7 @@ ACTION RULES:
     if (process.env.POLLINATIONS_API_KEY) {
         for (const model of POLLINATIONS_MODELS) {
             try {
-                const response = await fetch(POLLINATIONS_ENDPOINT, {
+                const response = await fetchWithTimeout(POLLINATIONS_ENDPOINT, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${process.env.POLLINATIONS_API_KEY}`,
@@ -271,11 +393,13 @@ ACTION RULES:
                         temperature: 0.6,
                         max_tokens: 1024
                     })
-                });
+                }, PROVIDER_TIMEOUT_MS);
 
-                const data = await response.json();
+                const rawText = await response.text();
+                let data = null;
+                try { data = JSON.parse(rawText); } catch (e) { /* ignore */ }
 
-                if (response.status === 429) {
+                if (isRateLimit(response.status, data, rawText)) {
                     debugLog.push(`Pollinations/${model}: rate limited`);
                     continue;
                 }
@@ -283,20 +407,28 @@ ACTION RULES:
                     debugLog.push(`Pollinations/${model}: no pollen budget`);
                     continue;
                 }
-                if (data.error) {
-                    debugLog.push(`Pollinations/${model}: ${(data.error.message || data.error || '').toString().substring(0, 60)}`);
+                if (data && data.error) {
+                    debugLog.push(`Pollinations/${model}: ${extractError(data, rawText)}`);
                     continue;
                 }
-                const reply = data.choices?.[0]?.message?.content;
+                if (response.status !== 200) {
+                    debugLog.push(`Pollinations/${model}: HTTP ${response.status}`);
+                    continue;
+                }
+
+                const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) {
                     debugLog.push(`Pollinations/${model}: empty`);
                     continue;
                 }
 
+                const result = { reply, provider: 'pollinations', model, usage: data.usage || null };
+                setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Pollinations/${model}`);
-                return res.status(200).json({ reply, provider: 'pollinations', model, usage: data.usage || null });
+                return res.status(200).json(result);
             } catch (err) {
-                debugLog.push(`Pollinations/${model}: ${(err.message || '').substring(0, 60)}`);
+                const msg = err.name === 'AbortError' ? 'timeout' : (err.message || 'error');
+                debugLog.push(`Pollinations/${model}: ${msg.substring(0, 60)}`);
                 continue;
             }
         }
