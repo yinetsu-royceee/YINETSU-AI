@@ -31,14 +31,14 @@ export default async function handler(req, res) {
 }
 
 // ============================================
-// AUDIO SEARCH — Universal Multi-Query
+// AUDIO SEARCH — Better Name Extraction
 // ============================================
 async function searchAudio(query, res) {
     const allResults = [];
     const seenIds = new Set();
     const tavilyKey = process.env.TAVILY_API_KEY;
 
-    // LAYER 1: Roblox Toolbox Service
+    // LAYER 1: Roblox Toolbox
     async function searchToolbox(keyword) {
         try {
             const url = 'https://apis.roblox.com/toolbox-service/v1/marketplace/5?keyword=' + encodeURIComponent(keyword) + '&limit=30';
@@ -74,7 +74,7 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
-    // LAYER 2: Legacy Catalog API
+    // LAYER 2: Legacy Catalog
     async function searchCatalog(keyword) {
         try {
             const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(keyword) + '&Limit=30&SortType=Relevance';
@@ -104,15 +104,14 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
-    // LAYER 3: Universal Web Search via Tavily (multi-query)
+    // LAYER 3: Web Search — SMART NAME EXTRACTION
     async function searchWebAudio(keyword) {
         if (!tavilyKey || tavilyKey.length < 10) return;
 
         const queries = [
             keyword + " roblox song ID list",
-            keyword + " roblox audio library ID",
-            keyword + " roblox music codes working",
-            keyword + " roblox song IDs 2024 2025",
+            keyword + " roblox music code",
+            '"' + keyword + '" roblox audio id',
         ];
 
         for (const q of queries) {
@@ -134,19 +133,19 @@ async function searchAudio(query, res) {
                 if (!Array.isArray(data.results)) continue;
 
                 for (const r of data.results) {
-                    const combined = (r.title || "") + " " + (r.content || "") + " " + (r.url || "");
+                    const content = r.content || "";
 
-                    // Extract roblox.com/library/ID
-                    const libraryMatches = combined.match(/roblox\.com\/library\/(\d{6,})/g) || [];
-                    for (const m of libraryMatches) {
-                        const idMatch = m.match(/(\d{6,})/);
-                        if (idMatch) {
-                            const pid = idMatch[1];
-                            if (seenIds.has(pid)) continue;
+                    // SMART PATTERN 1: "Song Name - 12345678"
+                    const pattern1 = /([A-Za-z0-9\s'\.\,\!\?\&\-\(\)]{3,80}?)\s*[-–:]\s*(\d{6,15})/g;
+                    let match;
+                    while ((match = pattern1.exec(content)) !== null) {
+                        const songName = match[1].trim();
+                        const pid = match[2];
+                        if (songName.length > 2 && !seenIds.has(pid)) {
                             seenIds.add(pid);
                             allResults.push({
                                 id: pid,
-                                name: (r.title || "Roblox Audio").replace(/\s*[|\-–].*$/, "").trim(),
+                                name: songName,
                                 creator: "From web",
                                 duration: 0,
                                 isVerified: false,
@@ -156,30 +155,39 @@ async function searchAudio(query, res) {
                         }
                     }
 
-                    // Extract "ID: 12345678" patterns
-                    const idPatterns = combined.match(/(?:id|ID|code|Code)[:\s]+(\d{6,15})/g) || [];
-                    for (const match of idPatterns) {
-                        const numMatch = match.match(/(\d{6,15})/);
-                        if (numMatch) {
-                            const pid = numMatch[1];
-                            const num = parseInt(pid);
-                            if (num > 100000 && num < 999999999999999 && !seenIds.has(pid)) {
-                                seenIds.add(pid);
-                                allResults.push({
-                                    id: pid,
-                                    name: (r.title || "Audio ID").replace(/\s*[|\-–].*$/, "").trim(),
-                                    creator: "From web",
-                                    duration: 0,
-                                    isVerified: false,
-                                    source: "web",
-                                    url: "https://www.roblox.com/library/" + pid
-                                });
+                    // SMART PATTERN 2: Find ID and look for name nearby
+                    const idPattern = /(\d{6,15})/g;
+                    while ((match = idPattern.exec(content)) !== null) {
+                        const pid = match[1];
+                        const num = parseInt(pid);
+                        if (num < 100000 || num > 999999999999999) continue;
+                        if (seenIds.has(pid)) continue;
+
+                        const idx = match.index;
+                        const before = content.substring(Math.max(0, idx - 100), idx);
+                        const nameMatch = before.match(/([A-Za-z][A-Za-z0-9\s'\.\,\!\?]{3,60})\s*[-–:]?\s*$/);
+                        let songName = "Audio #" + pid.slice(-6);
+                        if (nameMatch && nameMatch[1]) {
+                            let candidate = nameMatch[1].trim();
+                            if (candidate.length > 3 && !candidate.match(/^(ID|Code|Roblox|Music|Song)$/i)) {
+                                songName = candidate;
                             }
                         }
+
+                        seenIds.add(pid);
+                        allResults.push({
+                            id: pid,
+                            name: songName,
+                            creator: "From web",
+                            duration: 0,
+                            isVerified: false,
+                            source: "web",
+                            url: "https://www.roblox.com/library/" + pid
+                        });
                     }
                 }
             } catch (e) { /* continue */ }
-            if (allResults.length >= 20) break;
+            if (allResults.length >= 30) break;
         }
     }
 
@@ -188,27 +196,15 @@ async function searchAudio(query, res) {
     if (allResults.length < 5) await searchCatalog(query);
     if (allResults.length < 5) await searchWebAudio(query);
 
-    // Related keywords (universal language support)
+    // Related keywords
     const lower = query.toLowerCase();
     const relatedTerms = {
-        "opm": ["opm", "filipino", "tagalog", "pinoy"],
+        "opm": ["opm", "filipino", "tagalog"],
         "filipino": ["filipino", "opm", "tagalog"],
         "tagalog": ["tagalog", "filipino", "opm"],
-        "pinoy": ["pinoy", "opm"],
         "kpop": ["kpop", "korean"],
-        "anime": ["anime", "japanese", "jpop"],
-        "lofi": ["lofi", "chill", "study"],
-        "phonk": ["phonk", "drift", "memphis"],
-        "edm": ["edm", "electronic", "house"],
-        "hiphop": ["hiphop", "rap", "trap"],
-        "rock": ["rock", "metal", "guitar"],
-        "pop": ["pop", "popular"],
-        "jazz": ["jazz", "smooth"],
-        "classical": ["classical", "piano"],
-        "rnb": ["rnb", "soul"],
-        "country": ["country", "western"],
-        "reggae": ["reggae", "ska"],
-        "latin": ["latin", "reggaeton"],
+        "anime": ["anime", "japanese"],
+        "phonk": ["phonk", "drift"],
     };
 
     for (const [key, terms] of Object.entries(relatedTerms)) {
@@ -223,16 +219,10 @@ async function searchAudio(query, res) {
         }
     }
 
-    // Sort: verified first, then by duration
-    allResults.sort((a, b) => {
-        if (a.isVerified !== b.isVerified) return b.isVerified - a.isVerified;
-        return (a.duration || 0) - (b.duration || 0);
-    });
-
     return res.status(200).json({
         query: query, type: "audio",
         count: allResults.length,
-        results: allResults.slice(0, 20)
+        results: allResults.slice(0, 30)
     });
 }
 
