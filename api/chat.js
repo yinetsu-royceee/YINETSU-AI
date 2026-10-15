@@ -1,28 +1,35 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Multi-Provider Fallback (Oct 2026)
-// TEST BUILD: Only llama-3.1-8b-instant for Groq
+// YINETSU AI — Multi-Provider Fallback (Oct 2026 FINAL)
+// Priority: Groq (Qwen → GPT-OSS) → Gemini → OpenRouter
+// Total capacity: ~5,000+ requests/day
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-// Groq model chain — ONLY llama-3.1-8b-instant for this test
+// ═══ GROQ MODELS (priority by RPD + tokens) ═══
+// Note: llama-3.1-8b-instant & gemma2-9b-it have been REMOVED from Groq catalog
 const GROQ_MODELS = [
-    'llama-3.1-8b-instant',
+    'qwen/qwen3.8-27b',         // ~1,000 RPD, 2M TPD ⭐ highest tokens
+    'openai/gpt-oss-120b',      // ~1,000 RPD, 200K TPD
+    'openai/gpt-oss-20b',       // ~1,000 RPD
 ];
 
+// ═══ GEMINI MODELS ═══
 const GEMINI_MODELS = [
-    'gemini-3.5-flash-lite',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
+    'gemini-3.5-flash-lite',    // ~1,500 RPD (highest free tier)
+    'gemini-2.5-flash-lite',    // ~1,500 RPD
+    'gemini-2.5-flash',         // ~500 RPD
 ];
 
+// ═══ OPENROUTER MODELS (Llama + free catalog) ═══
 const OPENROUTER_MODELS = [
-    'google/gemma-4-31b:free',
-    'nvidia/nemotron-3-super:free',
-    'nvidia/nemotron-3.5-lightning:free',
-    'thinkingmachines/inkling-small:free',
+    'meta-llama/llama-3.3-70b-instruct:free',    // ~50-1,000 RPD ⭐ Llama priority
+    'meta-llama/llama-3.1-8b-instruct:free',     // ~50-1,000 RPD
+    'google/gemma-4-31b:free',                   // Google fallback
+    'nvidia/nemotron-3-super:free',              // NVIDIA fallback
+    'nvidia/nemotron-3.5-lightning:free',        // NVIDIA fallback
 ];
 
 export default async function handler(req, res) {
@@ -86,7 +93,9 @@ ACTION RULES:
 
     const debugLog = [];
 
-    // ═══ PROVIDER 1: GROQ ═══
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 1: GROQ (Qwen → GPT-OSS)
+    // ═══════════════════════════════════════════════════════════════
     if (process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
             try {
@@ -131,7 +140,9 @@ ACTION RULES:
         debugLog.push('Groq: API key missing');
     }
 
-    // ═══ PROVIDER 2: GEMINI ═══
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 2: GEMINI
+    // ═══════════════════════════════════════════════════════════════
     if (process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
@@ -189,7 +200,9 @@ ACTION RULES:
         debugLog.push('Gemini: API key missing');
     }
 
-    // ═══ PROVIDER 3: OPENROUTER ═══
+    // ═══════════════════════════════════════════════════════════════
+    // PROVIDER 3: OPENROUTER (Llama priority)
+    // ═══════════════════════════════════════════════════════════════
     if (process.env.OPENROUTER_API_KEY) {
         for (const model of OPENROUTER_MODELS) {
             try {
@@ -236,7 +249,9 @@ ACTION RULES:
         debugLog.push('OpenRouter: API key missing');
     }
 
-    // ═══ ALL FAILED ═══
+    // ═══════════════════════════════════════════════════════════════
+    // ALL PROVIDERS EXHAUSTED
+    // ═══════════════════════════════════════════════════════════════
     console.log('[Yinetsu] ❌ All providers failed:', debugLog.join(' | '));
 
     return res.status(503).json({
