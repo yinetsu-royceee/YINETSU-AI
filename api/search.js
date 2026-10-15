@@ -62,15 +62,16 @@ async function searchAudio(query, res) {
 }
 
 // ============================================
-// GAME SEARCH — ORIGINAL + FANMADE COMBINED
+// GAME SEARCH — ORIGINAL (EXACT MATCH) + FANMADE
 // ============================================
 async function searchGame(query, res) {
     const results = [];
     const seenIds = new Set();
+    const lowerQuery = query.toLowerCase().trim();
 
     // 1. Kunin muna ang mga opisyal/catalog games (Dito kasama ang Original Game)
     try {
-        const catalogUrl = 'https://catalog.roblox.com/v1/search/items/details?Category=12&Keyword=' + encodeURIComponent(query) + '&Limit=10&SortType=Relevance';
+        const catalogUrl = 'https://catalog.roblox.com/v1/search/items/details?Category=12&Keyword=' + encodeURIComponent(query) + '&Limit=12&SortType=Relevance';
         const response = await fetch(catalogUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
         });
@@ -87,7 +88,7 @@ async function searchGame(query, res) {
                             placeId: String(placeId),
                             name: item.name || "Roblox Game",
                             creator: item.creatorName || "Unknown",
-                            playing: item.playing || item.viewCount || 50000, // Bigyan ng mataas na priority para mauna ang orig
+                            playing: item.playing || 0,
                             url: "https://www.roblox.com/games/" + placeId,
                             snippet: "Creator: " + (item.creatorName || "Unknown")
                         });
@@ -126,7 +127,7 @@ async function searchGame(query, res) {
                                         placeId: pid,
                                         name: (r.title || "Roblox Game").replace(/\s*[|\-–].*$/, "").trim(),
                                         creator: "From web",
-                                        playing: 100, // Fanmade/iba pa
+                                        playing: 0,
                                         url: "https://www.roblox.com/games/" + pid,
                                         snippet: (r.content || "").slice(0, 120)
                                     });
@@ -139,8 +140,13 @@ async function searchGame(query, res) {
         }
     } catch (e) { /* ignore */ }
 
-    // I-sort para laging unahin ang Original Game sa tuktok, pero nandon pa rin ang iba sa baba
-    results.sort((a, b) => b.playing - a.playing);
+    // Sorting: Unahin ang eksaktong pangalan na tumutugma sa search mo (Exact Match), tapos sunod ang iba
+    results.sort((a, b) => {
+        const aExact = a.name.toLowerCase() === lowerQuery ? 1 : 0;
+        const bExact = b.name.toLowerCase() === lowerQuery ? 1 : 0;
+        if (aExact !== bExact) return bExact - aExact;
+        return b.playing - a.playing;
+    });
 
     return res.status(200).json({
         query: query, type: "game",
