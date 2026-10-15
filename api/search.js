@@ -31,14 +31,13 @@ export default async function handler(req, res) {
 }
 
 // ============================================
-// AUDIO SEARCH — Better Name Extraction
+// AUDIO SEARCH — Universal Multi-Source
 // ============================================
 async function searchAudio(query, res) {
     const allResults = [];
     const seenIds = new Set();
     const tavilyKey = process.env.TAVILY_API_KEY;
 
-    // LAYER 1: Roblox Toolbox
     async function searchToolbox(keyword) {
         try {
             const url = 'https://apis.roblox.com/toolbox-service/v1/marketplace/5?keyword=' + encodeURIComponent(keyword) + '&limit=30';
@@ -74,7 +73,6 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
-    // LAYER 2: Legacy Catalog
     async function searchCatalog(keyword) {
         try {
             const url = 'https://catalog.roblox.com/v1/search/items/details?Category=Audio&Keyword=' + encodeURIComponent(keyword) + '&Limit=30&SortType=Relevance';
@@ -104,7 +102,6 @@ async function searchAudio(query, res) {
         } catch (e) { /* continue */ }
     }
 
-    // LAYER 3: Web Search — SMART NAME EXTRACTION
     async function searchWebAudio(keyword) {
         if (!tavilyKey || tavilyKey.length < 10) return;
 
@@ -135,7 +132,6 @@ async function searchAudio(query, res) {
                 for (const r of data.results) {
                     const content = r.content || "";
 
-                    // SMART PATTERN 1: "Song Name - 12345678"
                     const pattern1 = /([A-Za-z0-9\s'\.\,\!\?\&\-\(\)]{3,80}?)\s*[-–:]\s*(\d{6,15})/g;
                     let match;
                     while ((match = pattern1.exec(content)) !== null) {
@@ -155,7 +151,6 @@ async function searchAudio(query, res) {
                         }
                     }
 
-                    // SMART PATTERN 2: Find ID and look for name nearby
                     const idPattern = /(\d{6,15})/g;
                     while ((match = idPattern.exec(content)) !== null) {
                         const pid = match[1];
@@ -191,12 +186,10 @@ async function searchAudio(query, res) {
         }
     }
 
-    // Run all layers
     await searchToolbox(query);
     if (allResults.length < 5) await searchCatalog(query);
     if (allResults.length < 5) await searchWebAudio(query);
 
-    // Related keywords
     const lower = query.toLowerCase();
     const relatedTerms = {
         "opm": ["opm", "filipino", "tagalog"],
