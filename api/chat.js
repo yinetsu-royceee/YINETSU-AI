@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // YINETSU AI — Multi-Provider Fallback (Oct 2026 Update)
-// Order: Groq (4 models) → Gemini → OpenRouter
+// TEMP TEST: Groq + Gemini disabled → force OpenRouter
 // ═══════════════════════════════════════════════════════════════
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
@@ -94,7 +94,7 @@ ACTION RULES:
     const debugLog = [];
 
     // ═══════════════════════════════════════════════════════════════
-    // PROVIDER 1: GROQ (multi-model fallback)
+    // PROVIDER 1: GROQ — TEMPORARILY DISABLED FOR TESTING
     // ═══════════════════════════════════════════════════════════════
     if (false && process.env.GROQ_API_KEY) {
         for (const model of GROQ_MODELS) {
@@ -145,12 +145,13 @@ ACTION RULES:
             }
         }
     } else {
-        debugLog.push('Groq: API key missing');
+        debugLog.push('Groq: DISABLED FOR TEST');
     }
 
     // ═══════════════════════════════════════════════════════════════
-// ═══ PROVIDER 2: GOOGLE GEMINI (TEMPORARILY DISABLED) ═══
-if (false && process.env.GEMINI_API_KEY) {
+    // PROVIDER 2: GOOGLE GEMINI — TEMPORARILY DISABLED FOR TESTING
+    // ═══════════════════════════════════════════════════════════════
+    if (false && process.env.GEMINI_API_KEY) {
         for (const model of GEMINI_MODELS) {
             try {
                 // Convert messages to Gemini format
@@ -218,7 +219,7 @@ if (false && process.env.GEMINI_API_KEY) {
             }
         }
     } else {
-        debugLog.push('Gemini: API key missing');
+        debugLog.push('Gemini: DISABLED FOR TEST');
     }
 
     // ═══════════════════════════════════════════════════════════════
