@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// YINETSU AI — Phase 10 + MEGA LOCAL RESPONSE LIBRARY (Oct 2026)
+// YINETSU AI — Phase 11 + MEGA LOCAL RESPONSE LIBRARY (Oct 2026)
 // Features: User Memory · Smart Context · Proactive · Error Recovery
+//           Game Analyzer · Hub Generator · Structured Output
 // Massive multi-language hardcoded responses (ZERO RPD)
 // ═══════════════════════════════════════════════════════════════
 
@@ -195,7 +196,6 @@ const LOCAL_GREETINGS = {
 
     // ── German ──
     "hallo": "Hallo! Ich bin Yinetsu AI. Wie kann ich dir helfen?",
-    "hi": "Hallo! Ich bin Yinetsu AI. Wie kann ich dir helfen?",
     "guten morgen": "Guten Morgen! Wie kann ich dir helfen?",
     "guten tag": "Guten Tag! Wie kann ich dir helfen?",
     "guten abend": "Guten Abend! Wie kann ich dir helfen?",
@@ -872,6 +872,205 @@ const OPENROUTER_MODELS = [
 const POLLINATIONS_MODELS = ['openai-fast'];
 
 // ═══════════════════════════════════════════════════════════════
+// v11: GAME CONTEXT + STRUCTURED OUTPUT + HUB GENERATOR
+// ═══════════════════════════════════════════════════════════════
+
+function parseActionsFromText(text) {
+    const actions = [];
+    const regex = /\[ACTION:([^\]]+)\]/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const inner = match[1];
+        const firstColon = inner.indexOf(':');
+        if (firstColon === -1) {
+            actions.push({ name: inner.trim(), arg: '', confidence: 0.9 });
+        } else {
+            actions.push({
+                name: inner.substring(0, firstColon).trim(),
+                arg: inner.substring(firstColon + 1).trim(),
+                confidence: 0.9
+            });
+        }
+    }
+    return actions;
+}
+
+function cleanReplyText(text) {
+    return text.replace(/\[ACTION:[^\]]+\]/g, '').trim().replace(/^\s*\n+/, '');
+}
+
+function buildGameContextBlock(context) {
+    if (!context) return '';
+    const parts = ['\n\n🎮 GAME CONTEXT (from client scanner):'];
+    if (context.gameName) parts.push(`Current game: ${context.gameName}`);
+    if (context.placeId) parts.push(`PlaceId: ${context.placeId}`);
+    if (context.features && Array.isArray(context.features) && context.features.length > 0) {
+        parts.push(`Detected features (from live scan):`);
+        for (const f of context.features.slice(0, 15)) {
+            const label = f.label || f.name || 'Feature';
+            const conf = f.confidence != null ? ` (${Math.floor(f.confidence * 100)}%)` : '';
+            parts.push(`  • ${label}${conf}`);
+        }
+    }
+    if (context.summary) {
+        const s = context.summary;
+        parts.push(`Scan summary: ${s.remotes || 0} remotes, ${s.breakables || 0} breakables, ${s.eggs || 0} eggs, ${s.enemies || 0} enemies, ${s.collectibles || 0} collectibles`);
+    }
+    if (context.leaderstats && Array.isArray(context.leaderstats)) {
+        parts.push(`Player stats:`);
+        for (const s of context.leaderstats.slice(0, 10)) {
+            parts.push(`  • ${s.name}: ${s.value}`);
+        }
+    }
+    if (context.warnings && context.warnings.length > 0) {
+        parts.push(`⚠️ Warnings: ${context.warnings.join('; ')}`);
+    }
+    return parts.join('\n');
+}
+
+function buildHubGeneratorRules() {
+    return `
+
+🎮 GAME ANALYZER + HUB GENERATOR (HIGH PRIORITY):
+You are the "prodigy" for game automation. Follow these patterns:
+
+PATTERN A — VAGUE user (wants GUI but no hub name):
+  User: "gawan mo ko ng gui" / "make me a gui" / "anong features sa game"
+  → Output [ACTION:show_game_plan]
+  → This scans game, shows features, asks for hub name confirmation
+
+PATTERN B — SPECIFIC user (hub name given):
+  User: "Pet Simulator X - Yinetsu Hub" / "gawan mo ko ng ULTRA HUB"
+  → Extract hub name and output [ACTION:make_custom_hub:HUB_NAME]
+
+  HUB NAME EXTRACTION:
+  • "GameName - HubName" → hub = "HubName"
+  • "gawan mo ko ng X" → hub = "X"
+  • "make me a hub called X" → hub = "X"
+  • "gumawa ka ng X" → hub = "X"
+
+PATTERN C — CONFIRMATION (after show_game_plan):
+  User: "oo" / "sige" / "go" / "yes"
+  → Output [ACTION:make_custom_hub:Yinetsu Hub]
+
+PATTERN D — MODIFY (after hub generated):
+  User: "palitan mo yung name to X" → [ACTION:make_custom_hub:X]
+  User: "dagdagan mo pa" → [ACTION:scan_game]
+
+GAME MISMATCH: If user mentions game X but context.gameName is Y → politely note mismatch, ask if they want current game instead.
+
+EXAMPLES (multi-language):
+  • "Pet Simulator X - Yinetsu Hub" → [ACTION:make_custom_hub:Yinetsu Hub]
+  • "gawan mo ko ng auto farm gui" → [ACTION:make_custom_hub:Auto Farm Hub]
+  • "psx hub" → [ACTION:make_custom_hub:PSX Hub]
+  • "make me a hub called Pro" → [ACTION:make_custom_hub:Pro]
+  • "ano pwedeng i-auto" → [ACTION:show_game_plan]
+  • "scan mo game" → [ACTION:scan_game]
+`;
+}
+
+function extractHubName(message) {
+    const patterns = [
+        /^(.+?)\s*[-–—]\s*(.+)$/,
+        /^(?:gawan|gumawa|gawa|make|create|build|generate|gen)\s+(?:mo|ka|me|ako)?\s*(?:ng|a|an)?\s+(.+)$/i,
+        /(?:called|named|na|tawag)\s+(.+)$/i,
+    ];
+    for (const p of patterns) {
+        const m = message.match(p);
+        if (m) {
+            let name = (m[2] || m[1] || '').trim();
+            name = name.replace(/[\s.,!?]+$/, '');
+            name = name.replace(/\s+(gui|hub|now|please|po|bro|na)$/i, '').trim();
+            if (name.length < 2) continue;
+            if (/^(gui|hub|menu|panel)$/i.test(name)) return 'Yinetsu Hub';
+            if (name.length < 60) return name;
+        }
+    }
+    return null;
+}
+
+function isHubRequest(message) {
+    const lower = message.toLowerCase();
+    const hubKeywords = ['hub', 'gui', 'menu', 'panel', 'interface'];
+    const actionKeywords = ['gawan', 'gumawa', 'gawa', 'make', 'create', 'build', 'generate', 'gen'];
+    const hasHub = hubKeywords.some(k => lower.includes(k));
+    const hasAction = actionKeywords.some(k => lower.includes(k));
+    return hasHub && (hasAction || / [-–—] /.test(message));
+}
+
+const LOCAL_GAME_ANALYZER_COMMANDS = [
+    { pattern: /^(?:scan|i-?scan|analyze|i-?analyze|suri(?:n)?)\s*(?:mo\s+)?(?:yung\s+|ang\s+)?(?:game|laro|game ko)?$/i, template: "[ACTION:scan_game]\n🔍 Scanning game..." },
+    { pattern: /^(?:anong|ano)\s+(?:pwedeng|pwede|kaya|features?)\s+(?:i-?auto|i-?automate|gawin|sa game)/i, template: "[ACTION:show_game_plan]\n🔍 Analyzing features..." },
+    { pattern: /^(?:what|anong)\s+(?:features?|can i automate|auto(?:s)?)/i, template: "[ACTION:show_game_plan]\n🔍 Analyzing features..." },
+    { pattern: /^(?:game|current\s+game)\s+(?:info|features?|scan)$/i, template: "[ACTION:scan_game]\n🔍 Scanning..." },
+    { pattern: /^(?:auto\s*farm|autofarm)$/i, template: "[ACTION:make_custom_hub:Auto Farm Hub]\n⚡ Creating Auto Farm Hub..." },
+    { pattern: /^(?:auto\s*hatch|autohatch)$/i, template: "[ACTION:make_custom_hub:Auto Hatch Hub]\n⚡ Creating Auto Hatch Hub..." },
+    { pattern: /^(?:auto\s*break|autobreak)$/i, template: "[ACTION:make_custom_hub:Auto Break Hub]\n⚡ Creating Auto Break Hub..." },
+    { pattern: /^(?:auto\s*collect|autocollect)$/i, template: "[ACTION:make_custom_hub:Auto Collect Hub]\n⚡ Creating Auto Collect Hub..." },
+];
+
+function checkGameAnalyzerLocal(message) {
+    const trimmed = message.trim();
+
+    if (isHubRequest(trimmed)) {
+        const hubName = extractHubName(trimmed);
+        if (hubName && hubName.length >= 2) {
+            const reply = `⚡ Creating **${hubName}**...`;
+            return {
+                reply,
+                cleanedReply: reply,
+                actions: [{ name: 'make_custom_hub', arg: hubName, confidence: 0.95 }],
+                needsConfirm: false,
+                confidence: 0.95,
+                provider: 'local',
+                model: 'hub-extract',
+                cached: true,
+                local: true,
+            };
+        }
+    }
+
+    for (const cmd of LOCAL_GAME_ANALYZER_COMMANDS) {
+        const match = trimmed.match(cmd.pattern);
+        if (match) {
+            let reply = cmd.template;
+            for (let i = 1; i < match.length; i++) {
+                reply = reply.split(`{${i - 1}}`).join(match[i] || '');
+            }
+            const actions = parseActionsFromText(reply);
+            return {
+                reply,
+                cleanedReply: cleanReplyText(reply),
+                actions,
+                needsConfirm: actions.some(a => ['make_custom_hub', 'execute_result', 'money_give'].includes(a.name)),
+                confidence: 0.9,
+                provider: 'local',
+                model: 'game-analyzer',
+                cached: true,
+                local: true,
+            };
+        }
+    }
+
+    return null;
+}
+
+function buildStructuredResponse(reply, providerInfo) {
+    const actions = parseActionsFromText(reply);
+    const needsConfirm = actions.some(a =>
+        ['make_custom_hub', 'execute_result', 'money_give', 'join_by_id', 'start_recording'].includes(a.name)
+    );
+    return {
+        reply,
+        cleanedReply: cleanReplyText(reply),
+        actions,
+        needsConfirm,
+        confidence: actions.length > 0 ? 0.9 : 1.0,
+        ...providerInfo,
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ═══════════════════════════════════════════════════════════════
 export default async function handler(req, res) {
@@ -884,6 +1083,14 @@ export default async function handler(req, res) {
     const message = req.query.message || (req.body && req.body.message);
     const customSystem = req.query.system || (req.body && req.body.system);
     const historyRaw = req.query.history || (req.body && req.body.history);
+    const contextRaw = req.query.context || (req.body && req.body.context);
+
+    let gameContext = null;
+    if (contextRaw) {
+        try {
+            gameContext = typeof contextRaw === 'string' ? JSON.parse(contextRaw) : contextRaw;
+        } catch (e) { /* ignore invalid context */ }
+    }
 
     if (!message) {
         return res.status(400).json({ reply: "No message provided." });
@@ -929,7 +1136,9 @@ ACTION RULES:
 
 🩹 ERROR RECOVERY: If user's message is unclear or has typos, suggest 2-3 common commands they might mean.`;
 
-    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction;
+    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction
+        + buildGameContextBlock(gameContext)
+        + buildHubGeneratorRules();
 
     let history = [];
     if (historyRaw) {
@@ -939,11 +1148,23 @@ ACTION RULES:
         } catch (e) { /* ignore */ }
     }
 
+    // ═══ NEW: GAME ANALYZER (highest priority) ═══
+    const gameAnalyzerResult = checkGameAnalyzerLocal(message);
+    if (gameAnalyzerResult) {
+        console.log(`[Yinetsu] ⚡ LOCAL: ${gameAnalyzerResult.model}`);
+        return res.status(200).json(gameAnalyzerResult);
+    }
+
     // ═══ CHECK LOCAL RESPONSE (ZERO RPD) ═══
     const localResponse = checkLocalResponse(message, history.length > 0);
     if (localResponse) {
         console.log(`[Yinetsu] ⚡ LOCAL: ${localResponse.model}`);
-        return res.status(200).json(localResponse);
+        return res.status(200).json(buildStructuredResponse(localResponse.reply, {
+            provider: localResponse.provider,
+            model: localResponse.model,
+            cached: true,
+            local: true,
+        }));
     }
 
     // ═══ BUILD MESSAGES ═══
@@ -993,7 +1214,7 @@ ACTION RULES:
                 const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) { debugLog.push(`Groq/${model}: empty`); continue; }
 
-                const result = { reply, provider: 'groq', model, usage: data.usage || null };
+                const result = buildStructuredResponse(reply, { provider: 'groq', model, usage: data.usage || null });
                 setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Groq/${model}`);
                 return res.status(200).json(result);
@@ -1038,7 +1259,7 @@ ACTION RULES:
                 const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (!reply) { debugLog.push(`Gemini/${model}: empty`); continue; }
 
-                const result = { reply, provider: 'gemini', model, usage: data.usageMetadata || null };
+                const result = buildStructuredResponse(reply, { provider: 'gemini', model, usage: data.usageMetadata || null });
                 setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Gemini/${model}`);
                 return res.status(200).json(result);
@@ -1078,7 +1299,7 @@ ACTION RULES:
                 const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) { debugLog.push(`OpenRouter/${model}: empty`); continue; }
 
-                const result = { reply, provider: 'openrouter', model, usage: data.usage || null };
+                const result = buildStructuredResponse(reply, { provider: 'openrouter', model, usage: data.usage || null });
                 setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ OpenRouter/${model}`);
                 return res.status(200).json(result);
@@ -1117,7 +1338,7 @@ ACTION RULES:
                 const reply = data?.choices?.[0]?.message?.content;
                 if (!reply) { debugLog.push(`Pollinations/${model}: empty`); continue; }
 
-                const result = { reply, provider: 'pollinations', model, usage: data.usage || null };
+                const result = buildStructuredResponse(reply, { provider: 'pollinations', model, usage: data.usage || null });
                 setCache(cacheKey, result);
                 console.log(`[Yinetsu] ✅ Pollinations/${model}`);
                 return res.status(200).json(result);
