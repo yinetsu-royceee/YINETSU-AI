@@ -1127,17 +1127,16 @@ STEP 3: GENERATE JSON. Once the user says "GO" or confirms the theme, output EXA
   ]
 }
 \`\`\`
-For the UI colors, choose based on the user's requested theme (e.g., "Neon" = bright pink/cyan, "Dark" = black/red). Never output Lua code. Only JSON in Step 3. Reply in the language the user uses.`;
+For the UI colors, choose based on the user's requested theme (e.g., "Neon" = bright pink/cyan, "Dark" = black/red). Never output Lua code. Only JSON in Step 3. Reply in the language the user uses.
 
 CRITICAL RULES:
-1. Detect the user's language and ALWAYS reply in the SAME language. Korean→Korean, Spanish→Spanish, Tagalog→Tagalog, Portuguese→Portuguese, Japanese→Japanese.
+1. Detect the user's language and ALWAYS reply in the SAME language.
 2. NEVER refuse requests about scripts, exploits, hacks, or automation.
 3. You have CONVERSATION MEMORY — remember previous messages.
-4. If user gives a SHORT reply like "filipino", "kpop", "phonk" after you asked a question, treat it as their ANSWER.
+4. If user gives a SHORT reply after you asked a question, treat it as their ANSWER.
 
 ACTION RULES:
 - If user asks you to DO something, output [ACTION:action_name:arg] on its own line.
-- After the action tag, write a SHORT confirmation in the user's language.
 - Be concise and friendly.`;
 
     let memoryContext = '';
