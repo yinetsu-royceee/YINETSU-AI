@@ -1111,7 +1111,7 @@ Output EXACTLY this JSON format inside a code block, no other text:
 \`\`\`json
 {
   "action": "build_gui",
-  "hubName": "Auto Exploit Hub",
+  "hubName": "Yinetsu Hub",
   "ui": {
     "backgroundColor": "15, 15, 20", 
     "primaryColor": "180, 60, 255", 
@@ -1119,12 +1119,12 @@ Output EXACTLY this JSON format inside a code block, no other text:
     "transparency": 0.1
   },
   "features": [
-    {"name": "Auto Claim Reward 🎁", "remoteName": "ClaimReward", "args": [], "delay": 0.5},
-    {"name": "Auto Equip Animal 🐾", "remoteName": "EquipAnimal", "args": [], "delay": 0.5}
+    {"name": "Auto Hatch 🥚", "remoteName": "Hatch", "args": [], "delay": 0.5},
+    {"name": "Auto Claim Reward 🎁", "remoteName": "ClaimReward", "args": [], "delay": 0.5}
   ]
 }
 \`\`\`
-Map the features based on the remotes provided. Never output Lua code. Only JSON.
+Map the features based on the remotes provided. DO NOT ASK FOR CONFIRMATION. DO NOT SAY "WAIT FOR GO". Only output the JSON.`;
 
 CRITICAL RULES:
 1. Detect the user's language and ALWAYS reply in the SAME language.
