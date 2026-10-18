@@ -1124,7 +1124,7 @@ Output EXACTLY this JSON format inside a code block, no other text:
   ]
 }
 \`\`\`
-Map the features based on the remotes provided. DO NOT ASK FOR CONFIRMATION. DO NOT SAY "WAIT FOR GO". Only output the JSON.`;
+Map the features based on the remotes provided. DO NOT ASK FOR CONFIRMATION. DO NOT SAY "WAIT FOR GO". Only output the JSON.
 
 CRITICAL RULES:
 1. Detect the user's language and ALWAYS reply in the SAME language.
