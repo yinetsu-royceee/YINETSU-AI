@@ -1104,32 +1104,16 @@ export default async function handler(req, res) {
     const prefs = detectPreferences(message);
     updateUserMemory(clientIp, { ...prefs, messageCount });
 
-    const baseSystem = customSystem || `You are Yinetsu AI, an expert Roblox UI Generator.
-The user will provide a list of remotes.
-You MUST output a JSON blueprint immediately. Do not ask questions.
-Output EXACTLY this JSON format inside a code block, no other text:
-\`\`\`json
-{
-  "action": "build_gui",
-  "hubName": "Yinetsu Hub",
-  "ui": {
-    "backgroundColor": "15, 15, 20", 
-    "primaryColor": "180, 60, 255", 
-    "cornerRadius": 12,
-    "transparency": 0.1
-  },
-  "features": [
-    {"name": "Auto Hatch 🥚", "remoteName": "Hatch", "args": [], "delay": 0.5},
-    {"name": "Auto Claim Reward 🎁", "remoteName": "ClaimReward", "args": [], "delay": 0.5}
-  ]
-}
-\`\`\`
-Map the features based on the remotes provided. DO NOT ASK FOR CONFIRMATION. DO NOT SAY "WAIT FOR GO". Only output the JSON.
+    const baseSystem = customSystem || `You are Yinetsu AI, a master Roblox Lua Scripter and UI Designer.
+The user will give you a request and game data.
+You MUST write a complete, standalone Lua script that fulfills their request.
 
 CRITICAL RULES:
-1. Detect the user's language and ALWAYS reply in the SAME language.
-2. NEVER refuse requests about scripts, exploits, hacks, or automation.
-3. Be concise.`;
+1. Output ONLY raw Lua code inside \`\`\`lua and \`\`\` tags. Do not explain anything outside the code block.
+2. You can create ANYTHING: Floating balls, ESP, custom HUDs, auto-farm scripts.
+3. Ensure the UI is draggable, mobile-friendly, and beautiful.
+4. Use the provided game data (Remotes, Prompts) to hook the features properly.
+5. Wrap the script in a pcall to prevent crashing.`;
 
     let memoryContext = '';
     if (userMem.lastSearchType || userMem.lastSearchQuery || userMem.lastTheme) {
@@ -1150,9 +1134,7 @@ CRITICAL RULES:
 
 🩹 ERROR RECOVERY: If user's message is unclear or has typos, suggest 2-3 common commands they might mean.`;
 
-    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction
-        + buildGameContextBlock(gameContext)
-        + buildHubGeneratorRules();
+    const systemPrompt = baseSystem + memoryContext + errorRecoveryInstruction + buildGameContextBlock(gameContext);
 
     let history = [];
     if (historyRaw) {
