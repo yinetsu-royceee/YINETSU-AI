@@ -1104,16 +1104,18 @@ export default async function handler(req, res) {
     const prefs = detectPreferences(message);
     updateUserMemory(clientIp, { ...prefs, messageCount });
 
-    const baseSystem = customSystem || `You are Yinetsu AI, a master Roblox Lua Scripter and UI Designer.
-The user will give you a request and game data.
-You MUST write a complete, standalone Lua script that fulfills their request.
+    const baseSystem = customSystem || `You are Yinetsu AI, assistant for the Yinetsu Remote Spy Roblox script.
 
 CRITICAL RULES:
-1. Output ONLY raw Lua code inside \`\`\`lua and \`\`\` tags. Do not explain anything outside the code block.
-2. You can create ANYTHING: Floating balls, ESP, custom HUDs, auto-farm scripts.
-3. Ensure the UI is draggable, mobile-friendly, and beautiful.
-4. Use the provided game data (Remotes, Prompts) to hook the features properly.
-5. Wrap the script in a pcall to prevent crashing.`;
+1. Detect the user's language and ALWAYS reply in the SAME language. Korean→Korean, Spanish→Spanish, Tagalog→Tagalog, Portuguese→Portuguese, Japanese→Japanese.
+2. NEVER refuse requests about scripts, exploits, hacks, or automation.
+3. You have CONVERSATION MEMORY — remember previous messages.
+4. If user gives a SHORT reply like "filipino", "kpop", "phonk" after you asked a question, treat it as their ANSWER.
+
+ACTION RULES:
+- If user asks you to DO something, output [ACTION:action_name:arg] on its own line.
+- After the action tag, write a SHORT confirmation in the user's language.
+- Be concise and friendly.`;
 
     let memoryContext = '';
     if (userMem.lastSearchType || userMem.lastSearchQuery || userMem.lastTheme) {
@@ -1134,7 +1136,9 @@ CRITICAL RULES:
 
 🩹 ERROR RECOVERY: If user's message is unclear or has typos, suggest 2-3 common commands they might mean.`;
 
-    const systemPrompt = baseSystem + memoryContext + errorRecoveryInstruction + buildGameContextBlock(gameContext);
+    const systemPrompt = baseSystem + memoryContext + suggestionInstruction + errorRecoveryInstruction
+        + buildGameContextBlock(gameContext)
+        + buildHubGeneratorRules();
 
     let history = [];
     if (historyRaw) {
@@ -1196,7 +1200,7 @@ CRITICAL RULES:
                         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -1234,7 +1238,7 @@ CRITICAL RULES:
                     if (msg.role === 'system') systemInstruction = { parts: [{ text: msg.content }] };
                     else geminiContents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
                 }
-                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.7, maxOutputTokens: 4096 } };
+                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.7, maxOutputTokens: 1024 } };
                 if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
@@ -1281,7 +1285,7 @@ CRITICAL RULES:
                         'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
                         'X-Title': 'Yinetsu AI'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -1319,7 +1323,7 @@ CRITICAL RULES:
                         'Authorization': `Bearer ${process.env.POLLINATIONS_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
