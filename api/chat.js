@@ -1200,7 +1200,7 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -1238,7 +1238,7 @@ ACTION RULES:
                     if (msg.role === 'system') systemInstruction = { parts: [{ text: msg.content }] };
                     else geminiContents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
                 }
-                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.7, maxOutputTokens: 1024 } };
+                const geminiBody = { contents: geminiContents, generationConfig: { temperature: 0.7, maxOutputTokens: 4096 } };
                 if (systemInstruction) geminiBody.systemInstruction = systemInstruction;
 
                 const url = `${GEMINI_ENDPOINT}/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
@@ -1285,7 +1285,7 @@ ACTION RULES:
                         'HTTP-Referer': 'https://yinetsu-ai.vercel.app',
                         'X-Title': 'Yinetsu AI'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
@@ -1323,7 +1323,7 @@ ACTION RULES:
                         'Authorization': `Bearer ${process.env.POLLINATIONS_API_KEY}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024 })
+                    body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 4096 })
                 }, PROVIDER_TIMEOUT_MS);
 
                 const rawText = await response.text();
